@@ -2,39 +2,97 @@
 
 import { createClient } from "@/lib/supabase/server";
 
+const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://localhost:8000";
+
 /**
- * Extracts text from a PDF file buffer using unpdf.
+ * Forwards CSV/JSON to the Python AI backend for extraction, 
+ * then automatically saves the structured result to Supabase.
  */
-export async function extractPdfTextAction(formData: FormData) {
+export async function processStructuredFileAction(formData: FormData) {
   try {
     const file = formData.get("file") as File;
-    if (!file) {
-      return { error: "No file provided" };
-    }
-
-    const arrayBuffer = await file.arrayBuffer();
-
-    // Use unpdf for robust server-side extraction without canvas/DOM polyfills
-    const { extractText } = await import("unpdf");
+    if (!file) return { error: "No file provided" };
     
-    // Uint8Array is expected by unpdf
-    const data = new Uint8Array(arrayBuffer);
-    
-    let extracted;
+    // Call Python FastAPI
+    let response;
     try {
-      extracted = await extractText(data);
-    } catch (parseError: any) {
-      console.error("PDF parsing failed:", parseError);
-      return { error: "Failed to parse PDF document. The file may be corrupt, password-protected, or not a valid PDF." };
+      response = await fetch(`${PYTHON_API_URL}/process/structured`, {
+        method: "POST",
+        body: formData,
+      });
+    } catch (e) {
+      return { error: "Failed to connect to AI backend. Ensure the Python FastAPI server is running." };
     }
     
-    const textStr = Array.isArray(extracted.text) 
-      ? extracted.text.join("\n") 
-      : extracted.text;
-
-    return { success: true, text: textStr };
+    if (!response.ok) {
+      let errorMsg = `Python API error: ${response.statusText}`;
+      try {
+        const errorData = await response.json();
+        if (errorData.detail) errorMsg = errorData.detail;
+      } catch (e) {}
+      return { error: errorMsg };
+    }
+    
+    const profile = await response.json();
+    
+    // Map profile to applicantData shape
+    const applicantData = {
+      applicant_ref: profile.applicantId,
+      age: profile.age,
+      employment_type: profile.employmentType,
+      requested_amount: profile.requestedLoanAmount,
+      tenure_months: profile.requestedTenure,
+      monthly_income: profile.declaredIncome ? profile.declaredIncome / 12 : undefined,
+      cibil_score: profile.bureauScore,
+      existing_emi: profile.emiDebits,
+      avg_bank_balance: profile.bankAvgBalance ?? profile.bankAvgCredits,
+      bounce_count: profile.bounceCount,
+      last_default: profile.writeOffFlag || profile.defaultFlag,
+      income_trend: profile.incomeTrend,
+      assets_value: profile.declaredAssets,
+      ...profile // include the raw extraction for raw_input_json
+    };
+    
+    return submitApplicantAction(applicantData);
   } catch (error: any) {
-    console.error("Error extracting PDF text:", error);
+    console.error("Error processing structured file:", error);
+    return { error: "An unexpected error occurred while processing the file." };
+  }
+}
+
+/**
+ * Forwards PDF to the Python AI backend for extraction.
+ * Returns the structured profile for human review (does NOT auto-save).
+ */
+export async function processPdfFileAction(formData: FormData) {
+  try {
+    const file = formData.get("file") as File;
+    if (!file) return { error: "No file provided" };
+    
+    // Call Python FastAPI
+    let response;
+    try {
+      response = await fetch(`${PYTHON_API_URL}/process/pdf`, {
+        method: "POST",
+        body: formData,
+      });
+    } catch (e) {
+      return { error: "Failed to connect to AI backend. Ensure the Python FastAPI server is running." };
+    }
+    
+    if (!response.ok) {
+      let errorMsg = `Python API error: ${response.statusText}`;
+      try {
+        const errorData = await response.json();
+        if (errorData.detail) errorMsg = errorData.detail;
+      } catch (e) {}
+      return { error: errorMsg };
+    }
+    
+    const profile = await response.json();
+    return { success: true, profile };
+  } catch (error: any) {
+    console.error("Error processing PDF file:", error);
     return { error: "An unexpected error occurred while processing the PDF file." };
   }
 }

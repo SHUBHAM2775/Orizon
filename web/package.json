@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:readme": "NOTE: You MUST run the Python FastAPI server in the `ai` folder (e.g. `cd ai && python api.py`) alongside `next dev` for AI file uploads to work.",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

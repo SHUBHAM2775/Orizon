@@ -5,12 +5,12 @@ import { validateApplicantData, type UploadData } from "@/lib/upload-utils";
 import { submitApplicantAction } from "@/app/actions/upload";
 
 interface PdfReviewFormProps {
-  extractedText: string;
+  extractedProfile: any;
   onCancel: () => void;
   onSuccess: () => void;
 }
 
-export function PdfReviewForm({ extractedText, onCancel, onSuccess }: PdfReviewFormProps) {
+export function PdfReviewForm({ extractedProfile, onCancel, onSuccess }: PdfReviewFormProps) {
   const [formData, setFormData] = useState<UploadData>({
     applicant_ref: "",
     age: "",
@@ -30,21 +30,28 @@ export function PdfReviewForm({ extractedText, onCancel, onSuccess }: PdfReviewF
   const [errors, setErrors] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // A very rudimentary attempt to auto-fill some fields based on the raw text.
-  // In a real app, this would be a proper NLP or LLM extraction step.
+  // Auto-fill fields based on the structured AI extraction
   useEffect(() => {
-    const text = extractedText.toLowerCase();
+    if (!extractedProfile) return;
+    
     const parsed: Partial<UploadData> = {};
     
-    // Very basic regex-based heuristics for demonstration purposes
-    const cibilMatch = text.match(/cibil(?: score)?\s*[:\-]?\s*(\d{3})/i);
-    if (cibilMatch) parsed.cibil_score = cibilMatch[1];
-    
-    const ageMatch = text.match(/age\s*[:\-]?\s*(\d{2})/i);
-    if (ageMatch) parsed.age = ageMatch[1];
+    if (extractedProfile.applicantId) parsed.applicant_ref = extractedProfile.applicantId;
+    if (extractedProfile.bureauScore) parsed.cibil_score = String(extractedProfile.bureauScore);
+    if (extractedProfile.age) parsed.age = String(extractedProfile.age);
+    if (extractedProfile.employmentType) parsed.employment_type = extractedProfile.employmentType;
+    if (extractedProfile.requestedLoanAmount) parsed.requested_amount = String(extractedProfile.requestedLoanAmount);
+    if (extractedProfile.requestedTenure) parsed.tenure_months = String(extractedProfile.requestedTenure);
+    if (extractedProfile.declaredIncome) parsed.monthly_income = String(Math.round(extractedProfile.declaredIncome / 12));
+    if (extractedProfile.emiDebits) parsed.existing_emi = String(extractedProfile.emiDebits);
+    if (extractedProfile.bankAvgBalance || extractedProfile.bankAvgCredits) parsed.avg_bank_balance = String(extractedProfile.bankAvgBalance || extractedProfile.bankAvgCredits);
+    if (extractedProfile.bounceCount) parsed.bounce_count = String(extractedProfile.bounceCount);
+    if (extractedProfile.declaredAssets) parsed.assets_value = String(extractedProfile.declaredAssets);
+    if (extractedProfile.writeOffFlag || extractedProfile.defaultFlag) parsed.last_default = "true";
+    if (extractedProfile.incomeTrend) parsed.income_trend = extractedProfile.incomeTrend.toUpperCase();
 
     setFormData((prev) => ({ ...prev, ...parsed }));
-  }, [extractedText]);
+  }, [extractedProfile]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -77,10 +84,10 @@ export function PdfReviewForm({ extractedText, onCancel, onSuccess }: PdfReviewF
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="space-y-2">
           <label className="font-mono text-[11px] uppercase tracking-[0.1em] text-[var(--ink-muted)]">
-            Extracted Text
+            Extracted Data
           </label>
           <div className="bg-[color-mix(in_oklch,var(--paper),var(--ink)_2%)] border border-[color-mix(in_oklch,var(--ink),transparent_85%)] rounded-[var(--radius-sm)] p-3 h-96 overflow-y-auto font-mono text-xs text-[var(--ink)] whitespace-pre-wrap">
-            {extractedText}
+            {JSON.stringify(extractedProfile, null, 2)}
           </div>
         </div>
         
@@ -102,34 +109,34 @@ export function PdfReviewForm({ extractedText, onCancel, onSuccess }: PdfReviewF
                 <input type="text" name="applicant_ref" value={formData.applicant_ref} onChange={handleChange} required className="form-input" placeholder="e.g. APP-001" />
               </FormField>
               <FormField label="Age">
-                <input type="number" name="age" value={formData.age} onChange={handleChange} required className="form-input" min="0" />
+                <input type="number" name="age" value={formData.age} onChange={handleChange} className="form-input" min="0" />
               </FormField>
               <FormField label="Employment Type">
-                <input type="text" name="employment_type" value={formData.employment_type} onChange={handleChange} required className="form-input" placeholder="Salaried / Self-Employed" />
+                <input type="text" name="employment_type" value={formData.employment_type} onChange={handleChange} className="form-input" placeholder="Salaried / Self-Employed" />
               </FormField>
               <FormField label="Requested Amount">
-                <input type="number" name="requested_amount" value={formData.requested_amount} onChange={handleChange} required className="form-input" min="0" />
+                <input type="number" name="requested_amount" value={formData.requested_amount} onChange={handleChange} className="form-input" min="0" />
               </FormField>
               <FormField label="Tenure (Months)">
-                <input type="number" name="tenure_months" value={formData.tenure_months} onChange={handleChange} required className="form-input" min="0" />
+                <input type="number" name="tenure_months" value={formData.tenure_months} onChange={handleChange} className="form-input" min="0" />
               </FormField>
               <FormField label="Monthly Income">
-                <input type="number" name="monthly_income" value={formData.monthly_income} onChange={handleChange} required className="form-input" min="0" />
+                <input type="number" name="monthly_income" value={formData.monthly_income} onChange={handleChange} className="form-input" min="0" />
               </FormField>
               <FormField label="CIBIL Score">
-                <input type="number" name="cibil_score" value={formData.cibil_score} onChange={handleChange} required className="form-input" min="0" max="900" />
+                <input type="number" name="cibil_score" value={formData.cibil_score} onChange={handleChange} className="form-input" min="0" max="900" />
               </FormField>
               <FormField label="Existing EMI">
-                <input type="number" name="existing_emi" value={formData.existing_emi} onChange={handleChange} required className="form-input" min="0" />
+                <input type="number" name="existing_emi" value={formData.existing_emi} onChange={handleChange} className="form-input" min="0" />
               </FormField>
               <FormField label="Avg Bank Balance">
-                <input type="number" name="avg_bank_balance" value={formData.avg_bank_balance} onChange={handleChange} required className="form-input" min="0" />
+                <input type="number" name="avg_bank_balance" value={formData.avg_bank_balance} onChange={handleChange} className="form-input" min="0" />
               </FormField>
               <FormField label="Bounce Count">
-                <input type="number" name="bounce_count" value={formData.bounce_count} onChange={handleChange} required className="form-input" min="0" />
+                <input type="number" name="bounce_count" value={formData.bounce_count} onChange={handleChange} className="form-input" min="0" />
               </FormField>
               <FormField label="Assets Value">
-                <input type="number" name="assets_value" value={formData.assets_value} onChange={handleChange} required className="form-input" min="0" />
+                <input type="number" name="assets_value" value={formData.assets_value} onChange={handleChange} className="form-input" min="0" />
               </FormField>
               <FormField label="Income Trend">
                 <select name="income_trend" value={formData.income_trend} onChange={handleChange} className="form-input">

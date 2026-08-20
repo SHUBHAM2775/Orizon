@@ -3,8 +3,8 @@
 import { useState, useRef } from "react";
 import { IndexCard, IndexCardHeader } from "@/components/ui/index-card";
 import { cn } from "@/lib/utils";
-import { parseCSV, parseJSON, validateApplicantData, type UploadData } from "@/lib/upload-utils";
-import { submitApplicantAction, extractPdfTextAction } from "@/app/actions/upload";
+import { validateApplicantData, type UploadData } from "@/lib/upload-utils";
+import { submitApplicantAction } from "@/app/actions/upload";
 import { PdfReviewForm } from "./pdf-review-form";
 
 export function FileUploadSection({ onUploaded }: { onUploaded?: () => void } = {}) {
@@ -17,7 +17,7 @@ export function FileUploadSection({ onUploaded }: { onUploaded?: () => void } = 
   const [errors, setErrors] = useState<string[]>([]);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   
-  const [pdfText, setPdfText] = useState<string | null>(null);
+  const [extractedProfile, setExtractedProfile] = useState<any | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const acceptString = mode === "data" ? ".csv,.json" : ".pdf";
@@ -49,7 +49,7 @@ export function FileUploadSection({ onUploaded }: { onUploaded?: () => void } = 
   const handleFileSelection = (selectedFile: File) => {
     setErrors([]);
     setSuccessMsg(null);
-    setPdfText(null);
+    setExtractedProfile(null);
     
     const ext = selectedFile.name.split('.').pop()?.toLowerCase();
     
@@ -70,7 +70,7 @@ export function FileUploadSection({ onUploaded }: { onUploaded?: () => void } = 
     setFile(null);
     setErrors([]);
     setSuccessMsg(null);
-    setPdfText(null);
+    setExtractedProfile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -80,31 +80,17 @@ export function FileUploadSection({ onUploaded }: { onUploaded?: () => void } = 
     setErrors([]);
 
     try {
-      const ext = file.name.split('.').pop()?.toLowerCase();
-      let validationResult;
+      const formData = new FormData();
+      formData.append("file", file);
 
-      if (ext === "csv") {
-        validationResult = await parseCSV(file);
-      } else if (ext === "json") {
-        validationResult = await parseJSON(file);
-      } else {
-        setErrors(["Unsupported file type"]);
-        setIsProcessing(false);
-        return;
-      }
+      // Using the new Python AI backend action
+      const { processStructuredFileAction } = await import("@/app/actions/upload");
+      const result = await processStructuredFileAction(formData);
 
-      if (!validationResult.valid) {
-        setErrors(validationResult.errors);
-        setIsProcessing(false);
-        return;
-      }
-
-      // Submit
-      const submitResult = await submitApplicantAction(validationResult.data);
-      if (submitResult.error) {
-        setErrors([submitResult.error]);
-      } else {
-        setSuccessMsg(`Successfully imported applicant: ${submitResult.applicant.applicant_ref}`);
+      if (result?.error) {
+        setErrors([result.error]);
+      } else if (result?.success) {
+        setSuccessMsg(`Successfully processed and imported applicant data.`);
         setFile(null);
         onUploaded?.();
       }
@@ -124,12 +110,14 @@ export function FileUploadSection({ onUploaded }: { onUploaded?: () => void } = 
       const formData = new FormData();
       formData.append("file", file);
 
-      const result = await extractPdfTextAction(formData);
+      // Using the new Python AI backend action
+      const { processPdfFileAction } = await import("@/app/actions/upload");
+      const result = await processPdfFileAction(formData);
       
-      if (result.error) {
+      if (result?.error) {
         setErrors([result.error]);
-      } else if (result.text) {
-        setPdfText(result.text);
+      } else if (result?.profile) {
+        setExtractedProfile(result.profile);
       }
     } catch (err: any) {
       setErrors([err.message || "An error occurred extracting PDF text"]);
@@ -191,14 +179,15 @@ export function FileUploadSection({ onUploaded }: { onUploaded?: () => void } = 
           </div>
         )}
 
-        {pdfText ? (
+        {extractedProfile ? (
           <PdfReviewForm 
-            extractedText={pdfText} 
+            extractedProfile={extractedProfile} 
             onCancel={resetState}
             onSuccess={() => {
               setSuccessMsg("PDF data successfully validated and inserted.");
-              setPdfText(null);
+              setExtractedProfile(null);
               setFile(null);
+              onUploaded?.();
             }} 
           />
         ) : (
