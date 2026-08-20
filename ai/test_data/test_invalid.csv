@@ -1,0 +1,3 @@
+applicantId,age,employmentType,requestedLoanAmount,requestedTenure,declaredIncome,bureauScore,writeOffFlag,bounceCount
+,40,Self-Employed,,36,,780,false,0
+APP-008,28,Salaried,30000.0,12,,710,true,3

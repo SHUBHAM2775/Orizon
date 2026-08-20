@@ -1,0 +1,83 @@
+{
+  "hard_reject_gates": [
+    {
+      "id": "HR-01",
+      "field": "writeOffFlag",
+      "operator": "==",
+      "threshold": true,
+      "severity": "HARD_REJECT",
+      "reason": "Applicant has a prior write-off."
+    },
+    {
+      "id": "HR-02",
+      "field": "settlementFlag",
+      "operator": "==",
+      "threshold": true,
+      "severity": "HARD_REJECT",
+      "reason": "Applicant has a prior settlement."
+    },
+    {
+      "id": "HR-03",
+      "field": "bureauScore",
+      "operator": "<",
+      "threshold": 550,
+      "severity": "HARD_REJECT",
+      "reason": "Bureau score is below the absolute minimum of 550."
+    }
+  ],
+  "eligibility_gates": [
+    {
+      "id": "EL-01",
+      "field": "age",
+      "operator": "<",
+      "threshold": 21,
+      "severity": "INELIGIBLE",
+      "reason": "Age is below minimum of 21."
+    },
+    {
+      "id": "EL-02",
+      "field": "age",
+      "operator": ">",
+      "threshold": 60,
+      "severity": "INELIGIBLE",
+      "reason": "Age is above maximum of 60."
+    },
+    {
+      "id": "EL-03",
+      "field": "declaredIncome",
+      "operator": "<",
+      "threshold": 15000,
+      "severity": "INELIGIBLE",
+      "reason": "Declared income is below minimum of 15,000."
+    }
+  ],
+  "scoring_rules": {
+    "foir_bands": {
+      "pass_threshold": 0.40,
+      "borderline_threshold": 0.55
+    },
+    "bureau_bands": {
+      "excellent": 750,
+      "good": 700,
+      "fair": 650
+    },
+    "bounces": {
+      "clean": 0,
+      "borderline": 2
+    },
+    "max_enquiries": 4,
+    "max_overdue": 10000,
+    "max_cash_flow_volatility": 0.4
+  },
+  "pricing": {
+    "income_multiplier": 5,
+    "max_loan_cap": 5000000,
+    "rates": {
+      "A": "10-12%",
+      "B": "12-14%",
+      "C": "14-18%",
+      "D": "18-24%",
+      "E": "24%+"
+    }
+  }
+}

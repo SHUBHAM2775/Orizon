@@ -1,0 +1,44 @@
+[
+  {
+    "applicant_id": "PERFECT-01",
+    "applicant_age": 32,
+    "job_type": "Salaried",
+    "requested_amount": 500000,
+    "requested_tenure": 36,
+    "monthly_salary": 120000,
+    "existing_emi": 20000,
+    "cibil_score": 780,
+    "write_off_flag": false,
+    "settlement_flag": false,
+    "cheque_bounces": 0,
+    "declared_assets": 1000000
+  },
+  {
+    "applicant_id": "BORDERLINE-02",
+    "applicant_age": 28,
+    "job_type": "Self-Employed",
+    "requested_amount": 300000,
+    "requested_tenure": 24,
+    "monthly_salary": 50000,
+    "existing_emi": 22000,
+    "cibil_score": 680,
+    "write_off_flag": false,
+    "settlement_flag": false,
+    "cheque_bounces": 2,
+    "declared_assets": 0
+  },
+  {
+    "applicant_id": "REJECT-03",
+    "applicant_age": 45,
+    "job_type": "Salaried",
+    "requested_amount": 1000000,
+    "requested_tenure": 48,
+    "monthly_salary": 80000,
+    "existing_emi": 50000,
+    "cibil_score": 520,
+    "write_off_flag": true,
+    "settlement_flag": false,
+    "cheque_bounces": 4,
+    "declared_assets": 50000
+  }
+]
