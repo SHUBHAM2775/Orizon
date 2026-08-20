@@ -177,8 +177,8 @@ export function RuleBreakdownTable({ results }: { results: EvaluationRuleResult[
       />
       <div className="-mx-6 -mb-6 mt-4 border-t border-[color-mix(in_oklch,var(--ink),transparent_85%)] overflow-x-auto">
         {/* Header */}
-        <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 px-6 py-2 bg-[color-mix(in_oklch,var(--paper),var(--ink)_3%)] border-b border-[color-mix(in_oklch,var(--ink),transparent_88%)]">
-          {["Rule", "Condition", "Actual", "Outcome", "Result"].map((h) => (
+        <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-4 px-6 py-2 bg-[color-mix(in_oklch,var(--paper),var(--ink)_3%)] border-b border-[color-mix(in_oklch,var(--ink),transparent_88%)]">
+          {["Rule", "Condition", "Actual", "Status"].map((h) => (
             <span key={h} className="font-mono text-[10px] uppercase tracking-wider text-[var(--ink-muted)]">{h}</span>
           ))}
         </div>
@@ -187,25 +187,28 @@ export function RuleBreakdownTable({ results }: { results: EvaluationRuleResult[
           <div
             key={r.ruleId}
             className={cn(
-              "grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 items-center px-6 py-2.5 border-b border-[color-mix(in_oklch,var(--ink),transparent_92%)] last:border-0",
+              "grid grid-cols-[1fr_auto_auto_auto] gap-x-4 items-center px-6 py-2.5 border-b border-[color-mix(in_oklch,var(--ink),transparent_92%)] last:border-0",
               r.triggered && "bg-[color-mix(in_oklch,var(--reject),transparent_96%)]",
             )}
           >
-            <div className="min-w-0">
+            <div className="min-w-0 flex flex-col gap-1 items-start">
               <p className="text-xs text-[var(--ink)] font-medium truncate">{r.ruleName}</p>
-              <p className="font-mono text-[10px] text-[var(--ink-muted)]">{r.reasonCode}</p>
+              <div className="flex gap-2 items-center">
+                <span className={cn(
+                  "font-mono text-[9px] px-1.5 py-0.5 rounded-[2px] uppercase tracking-wider",
+                  r.outcome === "HARD_REJECT" 
+                    ? "bg-[color-mix(in_oklch,var(--reject),transparent_90%)] text-[var(--reject)]" 
+                    : "bg-[color-mix(in_oklch,var(--exception),transparent_90%)] text-[var(--exception-foreground,var(--exception))]"
+                )}>
+                  PENALTY: {r.outcome.replace("_", " ")}
+                </span>
+              </div>
             </div>
             <span className="font-mono text-xs text-[var(--ink-muted)] whitespace-nowrap">
               {fmtOperator(r.operator, r.thresholdAtEvaluation)}
             </span>
             <span className="font-mono text-xs text-[var(--ink)] whitespace-nowrap">
               {fmtActual(r.actualValue, "")}
-            </span>
-            <span className={cn(
-              "font-mono text-[10px] uppercase tracking-wider whitespace-nowrap",
-              r.outcome === "HARD_REJECT" ? "text-[var(--reject)]" : "text-[var(--exception)]",
-            )}>
-              {r.outcome.replace("_", " ")}
             </span>
             <span
               className={cn(
