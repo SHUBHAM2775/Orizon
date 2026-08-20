@@ -94,14 +94,21 @@ def run_policy_engine(
 
     # 4. Eligibility rules (from default_policy.json)
     eligibility_rules = _evaluate_eligibility(profile)
+    ineligible = any(r.outcome != "PASS" for r in eligibility_rules)
 
     # 5. Score → decision mapping
-    final_decision, escalation = _decision_from_score(profile, final_score)
+    if ineligible:
+        final_decision, escalation = "HARD_REJECT", "SYSTEM_AUTO"
+    else:
+        final_decision, escalation = _decision_from_score(profile, final_score)
 
     # 6. Sizing
-    max_eligible = _max_eligible_amount(profile)
-    if foir_adj.cleared and foir_adj.final_amount is not None:
-        max_eligible = min(max_eligible, foir_adj.final_amount)
+    if ineligible:
+        max_eligible = 0.0
+    else:
+        max_eligible = _max_eligible_amount(profile)
+        if foir_adj.cleared and foir_adj.final_amount is not None:
+            max_eligible = min(max_eligible, foir_adj.final_amount)
     requested = profile.requestedLoanAmount
 
     all_rules = eligibility_rules + [

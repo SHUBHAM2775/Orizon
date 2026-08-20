@@ -9,19 +9,7 @@ export interface ValidationResult {
 }
 
 const REQUIRED_FIELDS = [
-  "applicant_ref",
-  "age",
-  "employment_type",
-  "requested_amount",
-  "tenure_months",
-  "monthly_income",
-  "cibil_score",
-  "existing_emi",
-  "avg_bank_balance",
-  "bounce_count",
-  "last_default",
-  "income_trend",
-  "assets_value"
+  "applicant_ref"
 ];
 
 export function validateApplicantData(data: UploadData): ValidationResult {
@@ -39,59 +27,47 @@ export function validateApplicantData(data: UploadData): ValidationResult {
 
   if (errors.length > 0) return { valid: false, errors };
 
-  // Convert types and check constraints
-  const age = Number(parsedData.age);
-  if (isNaN(age) || age < 0) errors.push("age must be a number >= 0");
-  else parsedData.age = age;
+  // Helper to parse optional numbers
+  const parseNum = (val: any, name: string, min: number = 0, max?: number) => {
+    if (val === undefined || val === null || val === "") return undefined;
+    const n = Number(val);
+    if (isNaN(n) || n < min || (max !== undefined && n > max)) {
+      errors.push(`${name} must be a valid number between ${min} and ${max ?? "infinity"}`);
+      return undefined;
+    }
+    return n;
+  };
 
-  const reqAmt = Number(parsedData.requested_amount);
-  if (isNaN(reqAmt) || reqAmt < 0) errors.push("requested_amount must be a number >= 0");
-  else parsedData.requested_amount = reqAmt;
-
-  const tenure = Number(parsedData.tenure_months);
-  if (isNaN(tenure) || tenure < 0) errors.push("tenure_months must be a number >= 0");
-  else parsedData.tenure_months = tenure;
-
-  const income = Number(parsedData.monthly_income);
-  if (isNaN(income) || income < 0) errors.push("monthly_income must be a number >= 0");
-  else parsedData.monthly_income = income;
-
-  const cibil = Number(parsedData.cibil_score);
-  if (isNaN(cibil) || cibil < 0 || cibil > 900) errors.push("cibil_score must be between 0 and 900");
-  else parsedData.cibil_score = cibil;
-
-  const emi = Number(parsedData.existing_emi);
-  if (isNaN(emi) || emi < 0) errors.push("existing_emi must be a number >= 0");
-  else parsedData.existing_emi = emi;
-
-  const bankBal = Number(parsedData.avg_bank_balance);
-  if (isNaN(bankBal) || bankBal < 0) errors.push("avg_bank_balance must be a number >= 0");
-  else parsedData.avg_bank_balance = bankBal;
-
-  const bounce = Number(parsedData.bounce_count);
-  if (isNaN(bounce) || bounce < 0) errors.push("bounce_count must be a number >= 0");
-  else parsedData.bounce_count = bounce;
-
-  const assets = Number(parsedData.assets_value);
-  if (isNaN(assets) || assets < 0) errors.push("assets_value must be a number >= 0");
-  else parsedData.assets_value = assets;
+  parsedData.age = parseNum(data.age, "age");
+  parsedData.requested_amount = parseNum(data.requested_amount, "requested_amount");
+  parsedData.tenure_months = parseNum(data.tenure_months, "tenure_months");
+  parsedData.monthly_income = parseNum(data.monthly_income, "monthly_income");
+  parsedData.cibil_score = parseNum(data.cibil_score, "cibil_score", 0, 900);
+  parsedData.existing_emi = parseNum(data.existing_emi, "existing_emi");
+  parsedData.avg_bank_balance = parseNum(data.avg_bank_balance, "avg_bank_balance");
+  parsedData.bounce_count = parseNum(data.bounce_count, "bounce_count");
+  parsedData.assets_value = parseNum(data.assets_value, "assets_value");
 
   // Boolean handling for last_default
-  const lastDef = String(parsedData.last_default).toLowerCase();
-  if (lastDef === "true" || lastDef === "1" || lastDef === "yes") parsedData.last_default = true;
-  else if (lastDef === "false" || lastDef === "0" || lastDef === "no") parsedData.last_default = false;
-  else errors.push("last_default must be a boolean (true/false)");
-
-  // Enum handling for income_trend
-  const trend = String(parsedData.income_trend).toUpperCase();
-  if (!["UP", "DOWN", "FLAT"].includes(trend)) {
-    errors.push("income_trend must be UP, DOWN, or FLAT");
-  } else {
-    parsedData.income_trend = trend;
+  if (data.last_default !== undefined && data.last_default !== null && data.last_default !== "") {
+    const lastDef = String(data.last_default).toLowerCase();
+    if (lastDef === "true" || lastDef === "1" || lastDef === "yes") parsedData.last_default = true;
+    else if (lastDef === "false" || lastDef === "0" || lastDef === "no") parsedData.last_default = false;
+    else errors.push("last_default must be a boolean (true/false)");
   }
 
-  // employment_type is string
-  parsedData.employment_type = String(parsedData.employment_type);
+  // Enum handling for income_trend
+  if (data.income_trend !== undefined && data.income_trend !== null && data.income_trend !== "") {
+    const trend = String(data.income_trend).toUpperCase();
+    if (!["UP", "DOWN", "FLAT"].includes(trend)) {
+      errors.push("income_trend must be UP, DOWN, or FLAT");
+    } else {
+      parsedData.income_trend = trend;
+    }
+  }
+
+  // strings
+  if (data.employment_type) parsedData.employment_type = String(data.employment_type);
   parsedData.applicant_ref = String(parsedData.applicant_ref);
 
   return {

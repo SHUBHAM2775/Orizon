@@ -15,7 +15,9 @@
  *   - Role-gated: analyst only.
  */
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useTransition } from "react";
+import { runEvaluationAction, getEvaluationsAction, getEvaluationRuleResultsAction } from "@/app/actions/evaluate";
+import { deleteApplicantAction } from "@/app/actions/upload";
 import { createClient } from "@/lib/supabase/client";
 import { RoleGuard } from "@/components/dashboard/role-guard";
 import { DashboardShell } from "@/components/dashboard/shell";
@@ -26,6 +28,8 @@ import {
   ApplicantProfileCard,
   EvalSummaryCard,
   RuleBreakdownTable,
+  XAINarrativeCard,
+  ToolResultsCard,
 } from "@/components/dashboard/eval-detail";
 import { cn } from "@/lib/utils";
 import { FileUploadSection } from "@/components/applications/file-upload";
@@ -79,6 +83,11 @@ type EvaluationRow = {
   interest_rate: number | null;
   risk_grade: string | null;
   derived_metrics_json: Record<string, any> | null;
+  xai_narrative: string | null;
+  tool_results_json: Record<string, any> | null;
+  api_budget_json: Record<string, any> | null;
+  ml_risk_tier: string | null;
+  ml_risk_score: number | null;
   rule_version_snapshot: Record<string, any> | null;
   evaluated_at: string;
 };
@@ -131,6 +140,7 @@ export default function ApplicationsDashboard() {
 function AnalystContent() {
   const [currentUser, setCurrentUser] = useState<{ email: string; role: string; name?: string } | null>(null);
   const supabase = createClient();
+  const [isPending, startTransition] = useTransition();
 
   // Real Supabase state
   const [applicantRows, setApplicantRows] = useState<ApplicantRow[] | null>(null);
@@ -138,6 +148,7 @@ function AnalystContent() {
   const [evaluationRows, setEvaluationRows] = useState<EvaluationRow[] | null>(null);
   const [evaluationsError, setEvaluationsError] = useState<string | null>(null);
   const [refetchKey, setRefetchKey] = useState(0);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     async function loadUser() {
@@ -188,19 +199,15 @@ function AnalystContent() {
   useEffect(() => {
     let cancelled = false;
     async function loadEvaluations() {
-      const { data, error } = await supabase
-        .from("evaluations")
-        .select(
-          "id, applicant_id, final_decision, eligible_amount, interest_rate, risk_grade, derived_metrics_json, rule_version_snapshot, evaluated_at",
-        )
-        .order("evaluated_at", { ascending: false });
-      if (cancelled) return;
-      if (error) {
-        setEvaluationsError(error.message);
-        setEvaluationRows([]);
-      } else {
+      try {
+        const data = await getEvaluationsAction();
+        if (cancelled) return;
         setEvaluationsError(null);
         setEvaluationRows(data ?? []);
+      } catch (error: any) {
+        if (cancelled) return;
+        setEvaluationsError(error.message);
+        setEvaluationRows([]);
       }
     }
     loadEvaluations();
@@ -210,6 +217,21 @@ function AnalystContent() {
   }, [supabase, refetchKey]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const handleDeleteApplicant = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this applicant?")) return;
+    setIsDeleting(true);
+    try {
+      const res = await deleteApplicantAction(id);
+      if (res.error) alert("Failed to delete: " + res.error);
+      else {
+        setRefetchKey(k => k + 1);
+        if (selectedId === id) setSelectedId(null);
+      }
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   // Map DB rows → legacy Applicant shape for the UI.
   const applicants = useMemo<Applicant[]>(
@@ -246,6 +268,83 @@ function AnalystContent() {
     }
     return map;
   }, [applicantRows, evaluationRows]);
+
+  const [ruleResults, setRuleResults] = useState<any[] | null>(null);
+  const [loadingRules, setLoadingRules] = useState(false);
+  const [rulesError, setRulesError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!latestRealEval) {
+      setRuleResults(null);
+      return;
+    }
+    let cancelled = false;
+    async function loadRules() {
+      setRuleResults(null);
+      setLoadingRules(true);
+      setRulesError(null);
+      try {
+        const data = await getEvaluationRuleResultsAction(latestRealEval!.id);
+        if (cancelled) return;
+        
+        const mapped = (data ?? []).map((r: any) => {
+          const rule = Array.isArray(r.rules) ? r.rules[0] : r.rules;
+          const outcome = (rule?.outcome ?? "PASS") as
+            | "HARD_REJECT"
+            | "EXCEPTION_L1"
+            | "EXCEPTION_L2"
+            | "PASS";
+          const mappedOutcome: "HARD_REJECT" | "EXCEPTION_L1" | "EXCEPTION_L2" | "APPROVE_FACTOR" =
+            outcome === "PASS" ? "APPROVE_FACTOR" : outcome;
+          const operator = (rule?.operator ?? "gte").toLowerCase() as
+            | "gte" | "lte" | "gt" | "lt" | "eq" | "neq";
+          return {
+            ruleId: r.rule_id,
+            ruleName: rule?.description ?? rule?.rule_code ?? "Rule",
+            reasonCode: rule?.reason_code ?? rule?.rule_code ?? "",
+            actualValue: r.actual_value ?? 0,
+            thresholdAtEvaluation: r.threshold_at_evaluation,
+            operator,
+            triggered: r.result === "TRIGGERED",
+            outcome: mappedOutcome,
+            explanation: rule?.description ?? "",
+          };
+        });
+        setRuleResults(mapped);
+      } catch (error: any) {
+        if (cancelled) return;
+        setRulesError(error.message);
+        setRuleResults([]);
+      }
+      setLoadingRules(false);
+    }
+    loadRules();
+    return () => {
+      cancelled = true;
+    };
+  }, [latestRealEval]);
+
+  const legacyEvaluation = latestRealEval && selectedRow ? {
+    id: latestRealEval.id,
+    applicantId: selectedRow.applicant_ref ?? selectedRow.id,
+    runAt: latestRealEval.evaluated_at,
+    runBy: "—",
+    finalDecision: latestRealEval.final_decision,
+    eligibleAmount: latestRealEval.eligible_amount ?? undefined,
+    interestRateBand: latestRealEval.interest_rate ? `${latestRealEval.interest_rate}%` : undefined,
+    rulesVersion: (latestRealEval.rule_version_snapshot as any)?.version ?? 1,
+    ruleResults: ruleResults ?? [],
+    derivedMetrics: {
+      ...latestRealEval.derived_metrics_json,
+      xai_narrative: latestRealEval.xai_narrative ?? latestRealEval.derived_metrics_json?.xai_narrative,
+      tool_results: latestRealEval.tool_results_json ?? latestRealEval.derived_metrics_json?.tool_results,
+      api_budget_summary: latestRealEval.api_budget_json ?? latestRealEval.derived_metrics_json?.api_budget_summary,
+      ml_result: {
+        risk_tier: latestRealEval.ml_risk_tier ?? latestRealEval.derived_metrics_json?.ml_result?.risk_tier,
+        risk_score: latestRealEval.ml_risk_score ?? latestRealEval.derived_metrics_json?.ml_result?.risk_score,
+      }
+    },
+  } : null;
 
   if (!currentUser) {
     return (
@@ -301,8 +400,9 @@ function AnalystContent() {
       <FileUploadSection onUploaded={() => setRefetchKey((k) => k + 1)} />
 
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_420px] gap-6 items-start">
-        {/* ── Left: applicant queue ─────────────────────────────────── */}
-        <IndexCard tabTone="default" as="div">
+        {/* ── Left: applicant queue & rule breakdown ────────────────── */}
+        <div className="space-y-6">
+          <IndexCard tabTone="default" as="div">
           <IndexCardHeader
             title="Applicant Queue"
             meta={`${applicants.length} application${applicants.length === 1 ? "" : "s"}`}
@@ -378,39 +478,81 @@ function AnalystContent() {
           </div>
         </IndexCard>
 
+        {/* ── Rule Breakdown (shown when an evaluation exists) ──────── */}
+        {latestRealEval && (
+          loadingRules ? (
+            <IndexCard tabTone="default" as="div">
+              <Skeleton className="h-5 w-32 mb-2" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-3/4 mt-2" />
+            </IndexCard>
+          ) : rulesError ? (
+            <IndexCard tabTone="default" as="div">
+              <p className="text-xs text-[var(--reject)]">Failed to load rule breakdown: {rulesError}</p>
+            </IndexCard>
+          ) : ruleResults ? (
+            <RuleBreakdownTable results={ruleResults} />
+          ) : null
+        )}
+        </div>
+
         {/* ── Right: detail panel ───────────────────────────────────── */}
         {selectedApplicant ? (
           <div className="space-y-4">
+            <div className="flex justify-between items-end">
+              <h2 className="font-medium text-lg text-[var(--ink)]">Profile Details</h2>
+              <button 
+                onClick={() => handleDeleteApplicant(selectedRow!.id)} 
+                disabled={isDeleting}
+                className="text-xs text-[var(--reject)] font-medium hover:underline disabled:opacity-50"
+              >
+                {isDeleting ? "Deleting..." : "Delete Applicant"}
+              </button>
+            </div>
             <ApplicantProfileCard applicant={selectedApplicant} />
 
             {/* Evaluation section: real if available, else explicit empty state */}
-            {latestRealEval ? (
-              <RealEvaluationPanel
-                evaluationRow={latestRealEval}
-                applicant={selectedApplicant}
-                applicantRow={selectedRow!}
-                supabase={supabase}
-                evaluationError={evaluationsError}
-              />
+            {latestRealEval && legacyEvaluation ? (
+              <div className="space-y-4">
+                {evaluationsError && (
+                  <p className="text-xs text-[var(--reject)]">
+                    Failed to load evaluations: {evaluationsError}
+                  </p>
+                )}
+                <EvalSummaryCard evaluation={legacyEvaluation} applicant={selectedApplicant} />
+                {legacyEvaluation.derivedMetrics?.tool_results && (
+                  <ToolResultsCard toolResults={legacyEvaluation.derivedMetrics.tool_results} />
+                )}
+                {legacyEvaluation.derivedMetrics?.xai_narrative && (
+                  <XAINarrativeCard narrative={legacyEvaluation.derivedMetrics.xai_narrative} />
+                )}
+              </div>
             ) : (
               <IndexCard tabTone="default" as="div">
                 <IndexCardHeader title="Evaluation" meta="No run yet" />
                 <p className="text-xs text-[var(--ink-muted)] mt-2 leading-relaxed">
                   No evaluation has been recorded for this applicant yet.
-                  Evaluation creation is being migrated to the live rule
-                  engine in a follow-up pass — the existing mock re-run
-                  button is intentionally disabled until then.
+                  Click the button below to run the live rule engine and 
+                  evaluate this applicant against the latest active policies.
                 </p>
                 <button
-                  disabled
+                  disabled={isPending}
+                  onClick={() => {
+                    if (!selectedRow) return;
+                    startTransition(() => {
+                      runEvaluationAction(selectedRow.id, selectedRow.applicant_ref ?? selectedRow.id)
+                        .then(() => setRefetchKey(k => k + 1))
+                        .catch(err => alert("Evaluation failed: " + err.message));
+                    });
+                  }}
                   className={cn(
                     "w-full mt-3 bg-[color-mix(in_oklch,var(--brass),transparent_60%)] text-[var(--paper)]",
                     "border border-[color-mix(in_oklch,var(--brass),transparent_60%)] rounded-[var(--radius-sm)]",
-                    "px-4 py-2.5 text-sm font-medium tracking-wide",
-                    "cursor-not-allowed",
+                    "px-4 py-2.5 text-sm font-medium tracking-wide transition-all",
+                    isPending ? "cursor-wait opacity-70" : "hover:bg-[color-mix(in_oklch,var(--brass),transparent_80%)] cursor-pointer"
                   )}
                 >
-                  Run Evaluation
+                  {isPending ? "Running..." : "Run Evaluation"}
                 </button>
               </IndexCard>
             )}
@@ -423,133 +565,6 @@ function AnalystContent() {
           </IndexCard>
         )}
       </div>
-    </div>
-  );
-}
-
-/**
- * Renders an existing real evaluation pulled from Supabase, plus the
- * rule-by-rule breakdown (read from evaluation_rule_results, joined with
- * rules to fetch names/explanations).
- */
-function RealEvaluationPanel({
-  evaluationRow,
-  applicant,
-  applicantRow,
-  supabase,
-  evaluationError,
-}: {
-  evaluationRow: EvaluationRow;
-  applicant: Applicant;
-  applicantRow: ApplicantRow;
-  supabase: ReturnType<typeof createClient>;
-  evaluationError: string | null;
-}) {
-  const [ruleResults, setRuleResults] = useState<Array<{
-    ruleId: string;
-    ruleName: string;
-    reasonCode: string;
-    actualValue: number | boolean;
-    thresholdAtEvaluation: number;
-    operator: "gte" | "lte" | "gt" | "lt" | "eq" | "neq";
-    triggered: boolean;
-    outcome: "HARD_REJECT" | "EXCEPTION_L1" | "EXCEPTION_L2" | "APPROVE_FACTOR";
-    explanation: string;
-  }> | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      setLoading(true);
-      setLoadError(null);
-      const { data, error } = await supabase
-        .from("evaluation_rule_results")
-        .select(
-          "id, evaluation_id, rule_id, result, actual_value, threshold_at_evaluation, rules:rule_id ( rule_code, description, field_name, operator, outcome, reason_code )",
-        )
-        .eq("evaluation_id", evaluationRow.id);
-      if (cancelled) return;
-      if (error) {
-        setLoadError(error.message);
-        setRuleResults([]);
-      } else {
-        // The PostgREST embed returns either an object or an array depending
-        // on the relation shape; rules is a single FK, so treat it as object.
-        const mapped = (data ?? []).map((r: any) => {
-          const rule = Array.isArray(r.rules) ? r.rules[0] : r.rules;
-          const outcome = (rule?.outcome ?? "PASS") as
-            | "HARD_REJECT"
-            | "EXCEPTION_L1"
-            | "EXCEPTION_L2"
-            | "PASS";
-          const mappedOutcome: "HARD_REJECT" | "EXCEPTION_L1" | "EXCEPTION_L2" | "APPROVE_FACTOR" =
-            outcome === "PASS" ? "APPROVE_FACTOR" : outcome;
-          const operator = (rule?.operator ?? "gte").toLowerCase() as
-            | "gte" | "lte" | "gt" | "lt" | "eq" | "neq";
-          return {
-            ruleId: r.rule_id,
-            ruleName: rule?.description ?? rule?.rule_code ?? "Rule",
-            reasonCode: rule?.reason_code ?? rule?.rule_code ?? "",
-            actualValue: r.actual_value ?? 0,
-            thresholdAtEvaluation: r.threshold_at_evaluation,
-            operator,
-            triggered: r.result === "TRIGGERED",
-            outcome: mappedOutcome,
-            explanation: rule?.description ?? "",
-          };
-        });
-        setRuleResults(mapped);
-      }
-      setLoading(false);
-    }
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [evaluationRow.id, supabase]);
-
-  // Adapt the real evaluation into the legacy Evaluation shape so the
-  // existing EvalSummaryCard + RuleBreakdownTable keep working.
-  const legacyEvaluation = {
-    id: evaluationRow.id,
-    applicantId: applicantRow.applicant_ref ?? applicantRow.id,
-    runAt: evaluationRow.evaluated_at,
-    runBy: "—",
-    finalDecision: evaluationRow.final_decision,
-    eligibleAmount: evaluationRow.eligible_amount ?? undefined,
-    interestRateBand: evaluationRow.interest_rate ? `${evaluationRow.interest_rate}%` : undefined,
-    rulesVersion:
-      (evaluationRow.rule_version_snapshot as any)?.version ??
-      (evaluationRow.rule_version_snapshot as any)?.rules_version ??
-      1,
-    ruleResults: ruleResults ?? [],
-  };
-
-  return (
-    <div className="space-y-4">
-      {evaluationError && (
-        <p className="text-xs text-[var(--reject)]">
-          Failed to load evaluations: {evaluationError}
-        </p>
-      )}
-      <EvalSummaryCard evaluation={legacyEvaluation} applicant={applicant} />
-      {loading ? (
-        <IndexCard tabTone="default" as="div">
-          <Skeleton className="h-5 w-32 mb-2" />
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-3/4 mt-2" />
-        </IndexCard>
-      ) : loadError ? (
-        <IndexCard tabTone="default" as="div">
-          <p className="text-xs text-[var(--reject)]">
-            Failed to load rule breakdown: {loadError}
-          </p>
-        </IndexCard>
-      ) : (
-        ruleResults && <RuleBreakdownTable results={ruleResults} />
-      )}
     </div>
   );
 }

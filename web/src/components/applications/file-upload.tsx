@@ -3,21 +3,21 @@
 import { useState, useRef } from "react";
 import { IndexCard, IndexCardHeader } from "@/components/ui/index-card";
 import { cn } from "@/lib/utils";
-import { parseCSV, parseJSON, validateApplicantData, type UploadData } from "@/lib/upload-utils";
-import { submitApplicantAction, extractPdfTextAction } from "@/app/actions/upload";
+import { validateApplicantData, type UploadData } from "@/lib/upload-utils";
+import { submitApplicantAction } from "@/app/actions/upload";
 import { PdfReviewForm } from "./pdf-review-form";
 
 export function FileUploadSection({ onUploaded }: { onUploaded?: () => void } = {}) {
   const [mode, setMode] = useState<"data" | "pdf">("data");
   
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   
   const [errors, setErrors] = useState<string[]>([]);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   
-  const [pdfText, setPdfText] = useState<string | null>(null);
+  const [extractedProfile, setExtractedProfile] = useState<any | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const acceptString = mode === "data" ? ".csv,.json" : ".pdf";
@@ -36,76 +36,69 @@ export function FileUploadSection({ onUploaded }: { onUploaded?: () => void } = 
     setIsDragging(false);
     
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleFileSelection(e.dataTransfer.files[0]);
+      handleFilesSelection(Array.from(e.dataTransfer.files));
     }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      handleFileSelection(e.target.files[0]);
+      handleFilesSelection(Array.from(e.target.files));
     }
   };
 
-  const handleFileSelection = (selectedFile: File) => {
+  const handleFilesSelection = (selectedFiles: File[]) => {
     setErrors([]);
     setSuccessMsg(null);
-    setPdfText(null);
+    setExtractedProfile(null);
     
-    const ext = selectedFile.name.split('.').pop()?.toLowerCase();
-    
-    if (mode === "data" && ext !== "csv" && ext !== "json") {
-      setErrors(["Invalid file type. Please upload a CSV or JSON file in Data mode."]);
-      return;
-    }
-    
-    if (mode === "pdf" && ext !== "pdf") {
-      setErrors(["Invalid file type. Please upload a PDF file in PDF mode."]);
-      return;
+    const validFiles: File[] = [];
+    for (const file of selectedFiles) {
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      
+      if (mode === "data" && ext !== "csv" && ext !== "json") {
+        setErrors(prev => [...prev, `Invalid file: ${file.name}. Only CSV or JSON allowed.`]);
+        continue;
+      }
+      
+      if (mode === "pdf" && ext !== "pdf") {
+        setErrors(prev => [...prev, `Invalid file: ${file.name}. Only PDF allowed.`]);
+        continue;
+      }
+
+      validFiles.push(file);
     }
 
-    setFile(selectedFile);
+    if (validFiles.length > 0) {
+      setFiles(prev => [...prev, ...validFiles]);
+    }
   };
 
   const resetState = () => {
-    setFile(null);
+    setFiles([]);
     setErrors([]);
     setSuccessMsg(null);
-    setPdfText(null);
+    setExtractedProfile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const handleProcessDataFile = async () => {
-    if (!file) return;
+    if (files.length === 0) return;
     setIsProcessing(true);
     setErrors([]);
 
     try {
-      const ext = file.name.split('.').pop()?.toLowerCase();
-      let validationResult;
+      const formData = new FormData();
+      files.forEach(f => formData.append("files", f));
 
-      if (ext === "csv") {
-        validationResult = await parseCSV(file);
-      } else if (ext === "json") {
-        validationResult = await parseJSON(file);
-      } else {
-        setErrors(["Unsupported file type"]);
-        setIsProcessing(false);
-        return;
-      }
+      // Using the new Python AI backend action
+      const { processStructuredFileAction } = await import("@/app/actions/upload");
+      const result = await processStructuredFileAction(formData);
 
-      if (!validationResult.valid) {
-        setErrors(validationResult.errors);
-        setIsProcessing(false);
-        return;
-      }
-
-      // Submit
-      const submitResult = await submitApplicantAction(validationResult.data);
-      if (submitResult.error) {
-        setErrors([submitResult.error]);
-      } else {
-        setSuccessMsg(`Successfully imported applicant: ${submitResult.applicant.applicant_ref}`);
-        setFile(null);
+      if (result?.error) {
+        setErrors([result.error]);
+      } else if (result?.success) {
+        setSuccessMsg(result.message || `Successfully processed and imported applicant data.`);
+        setFiles([]);
         onUploaded?.();
       }
     } catch (err: any) {
@@ -116,20 +109,26 @@ export function FileUploadSection({ onUploaded }: { onUploaded?: () => void } = 
   };
 
   const handleProcessPdfFile = async () => {
-    if (!file) return;
+    if (files.length === 0) return;
     setIsProcessing(true);
     setErrors([]);
 
     try {
       const formData = new FormData();
-      formData.append("file", file);
+      files.forEach(f => formData.append("files", f));
 
-      const result = await extractPdfTextAction(formData);
+      // Using the new Python AI backend action
+      const { processPdfFileAction } = await import("@/app/actions/upload");
+      const result = await processPdfFileAction(formData);
       
-      if (result.error) {
+      if (result?.error) {
         setErrors([result.error]);
-      } else if (result.text) {
-        setPdfText(result.text);
+      } else if (result?.profiles && result.profiles.length > 0) {
+        // The UI review form currently only supports reviewing one profile at a time
+        if (result.profiles.length > 1) {
+          setErrors(["Warning: Multiple PDFs uploaded, but the review form only supports one at a time. Showing the first one."]);
+        }
+        setExtractedProfile(result.profiles[0]);
       }
     } catch (err: any) {
       setErrors([err.message || "An error occurred extracting PDF text"]);
@@ -191,14 +190,15 @@ export function FileUploadSection({ onUploaded }: { onUploaded?: () => void } = 
           </div>
         )}
 
-        {pdfText ? (
+        {extractedProfile ? (
           <PdfReviewForm 
-            extractedText={pdfText} 
+            extractedProfile={extractedProfile} 
             onCancel={resetState}
             onSuccess={() => {
               setSuccessMsg("PDF data successfully validated and inserted.");
-              setPdfText(null);
-              setFile(null);
+              setExtractedProfile(null);
+              setFiles([]);
+              onUploaded?.();
             }} 
           />
         ) : (
@@ -213,18 +213,19 @@ export function FileUploadSection({ onUploaded }: { onUploaded?: () => void } = 
                 isDragging
                   ? "border-[var(--brass)] bg-[color-mix(in_oklch,var(--brass),transparent_95%)]"
                   : "border-[color-mix(in_oklch,var(--ink),transparent_80%)] hover:bg-[color-mix(in_oklch,var(--paper),var(--ink)_2%)]",
-                file ? "bg-[color-mix(in_oklch,var(--paper),var(--ink)_2%)] border-solid border-[color-mix(in_oklch,var(--ink),transparent_60%)]" : ""
+                files.length > 0 ? "bg-[color-mix(in_oklch,var(--paper),var(--ink)_2%)] border-solid border-[color-mix(in_oklch,var(--ink),transparent_60%)]" : ""
               )}
             >
               <input
                 type="file"
+                multiple
                 ref={fileInputRef}
                 onChange={handleFileChange}
                 accept={acceptString}
                 className="hidden"
               />
               
-              {!file ? (
+              {files.length === 0 ? (
                 <>
                   <p className="text-[var(--ink)] font-medium mb-1">
                     Click to browse or drag and drop
@@ -234,17 +235,21 @@ export function FileUploadSection({ onUploaded }: { onUploaded?: () => void } = 
                   </p>
                 </>
               ) : (
-                <div className="flex flex-col items-center gap-2">
-                  <div className="w-12 h-12 rounded-full bg-[color-mix(in_oklch,var(--brass),transparent_85%)] text-[var(--brass)] flex items-center justify-center font-mono text-xs uppercase">
-                    {file.name.split('.').pop()}
-                  </div>
-                  <p className="text-[var(--ink)] font-medium">{file.name}</p>
-                  <p className="text-xs text-[var(--ink-muted)] font-mono">{(file.size / 1024).toFixed(1)} KB</p>
+                <div className="flex flex-wrap justify-center gap-4 mt-4">
+                  {files.map((f, i) => (
+                    <div key={i} className="flex flex-col items-center gap-2 p-3 border border-[color-mix(in_oklch,var(--ink),transparent_80%)] rounded-[var(--radius-sm)] bg-[var(--paper)]">
+                      <div className="w-10 h-10 rounded-full bg-[color-mix(in_oklch,var(--brass),transparent_85%)] text-[var(--brass)] flex items-center justify-center font-mono text-xs uppercase">
+                        {f.name.split('.').pop()}
+                      </div>
+                      <p className="text-[var(--ink)] font-medium text-xs max-w-[120px] truncate" title={f.name}>{f.name}</p>
+                      <p className="text-[10px] text-[var(--ink-muted)] font-mono">{(f.size / 1024).toFixed(1)} KB</p>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
 
-            {file && (
+            {files.length > 0 && (
               <div className="mt-6 flex gap-3">
                 <button
                   onClick={resetState}

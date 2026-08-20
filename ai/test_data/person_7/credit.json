@@ -1,0 +1,15 @@
+{
+  "applicantId": "PERSON-007",
+  "bureauScore": 720,
+  "activeLoans": 2,
+  "dpdHistory": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "requestedLoanAmount": 800000,
+  "declaredIncome": 120000
+}
