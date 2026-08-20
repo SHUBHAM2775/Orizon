@@ -20,7 +20,7 @@ export async function signIn(email: string, password: string) {
   const { data: userData, error: userError } = await supabase
     .from("users")
     .select("role, status")
-    .eq("email", email)
+    .ilike("email", email)
     .single();
 
   if (userError || !userData) {
@@ -69,7 +69,7 @@ export async function getActivationEmail(token: string) {
   }
   
   // @ts-ignore - Supabase types are not generated, so users is returned as an object
-  const email = data.users?.email || Array.isArray(data.users) ? data.users[0]?.email : null;
+  const email = data.users?.email || (Array.isArray(data.users) ? data.users[0]?.email : null);
   
   if (!email) {
     return { error: "Associated user not found." };
@@ -93,34 +93,22 @@ export async function activateAccount(token: string, password: string) {
   }
 
   // @ts-ignore
-  const email = tokenData.users?.email;
+  const email = tokenData.users?.email || (Array.isArray(tokenData.users) ? tokenData.users[0]?.email : null);
   if (!email) {
     return { error: "Associated user not found." };
   }
 
-  // 2. Create user in Supabase Auth via Admin API
-  const { data: authUser, error: authError } = await adminClient.auth.admin.createUser({
-    email,
+  // 2. Set password for the existing auth user via Admin API
+  // We use updateUserById because the auth user was already created (with the exact same ID as public.users)
+  // during the admin user creation step.
+  const { data: authUser, error: authError } = await adminClient.auth.admin.updateUserById(tokenData.user_id, {
     password,
     email_confirm: true,
   });
 
-  // If user already exists in auth (e.g., they tried to sign up before), we can try to update them
-  if (authError && authError.message.includes("already registered")) {
-    // If they already exist but have a new token, we should just update their password.
-    // Fetch their auth user ID
-    const { data: existingUsers, error: listError } = await adminClient.auth.admin.listUsers();
-    if (listError) return { error: "Failed to resolve existing user." };
-    
-    const existingUser = existingUsers.users.find((u) => u.email === email);
-    if (!existingUser) return { error: "Failed to resolve existing user." };
-    
-    const { error: updateError } = await adminClient.auth.admin.updateUserById(existingUser.id, {
-      password,
-    });
-    if (updateError) return { error: updateError.message };
-  } else if (authError) {
-    return { error: authError.message };
+  if (authError) {
+    console.error("Failed to update user password in Supabase Auth:", authError);
+    return { error: "Failed to set user password: " + authError.message };
   }
 
   // 3. Mark token as used

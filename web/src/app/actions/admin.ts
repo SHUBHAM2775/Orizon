@@ -27,12 +27,29 @@ export async function createUserAction(email: string, name: string, role: string
       return { error: "Forbidden: Admin access required." };
     }
 
-    // 2. Insert into `users` table
+    // 2. Create user in Supabase Auth first (no password yet) to let Supabase generate the authoritative UUID
+    const { data: authData, error: authError } = await adminClient.auth.admin.createUser({
+      email,
+      email_confirm: false,
+    });
+
+    if (authError) {
+      if (authError.message.includes("already registered")) {
+        return { error: "User with this email already exists." };
+      }
+      console.error("Error creating auth user:", authError);
+      return { error: "Failed to create user credentials." };
+    }
+
+    const newUserId = authData.user.id;
+
+    // 3. Insert into `users` table using the EXACT SAME ID from auth.users
     const dbRole = role.toUpperCase().replace("-", "_") as DbUserRole;
     
     const { data: newUser, error: insertError } = await adminClient
       .from("users")
       .insert({
+        id: newUserId,
         email,
         name,
         role: dbRole,
@@ -43,11 +60,10 @@ export async function createUserAction(email: string, name: string, role: string
       .single();
 
     if (insertError) {
-      if (insertError.code === "23505") { // Unique violation
-        return { error: "User with this email already exists." };
-      }
-      console.error("Error creating user:", insertError);
-      return { error: "Failed to create user." };
+      // Rollback auth user if public table insert fails
+      await adminClient.auth.admin.deleteUser(newUserId);
+      console.error("Error creating public user:", insertError);
+      return { error: "Failed to create user profile." };
     }
 
     // 3. Generate token and insert into `password_setup_tokens`

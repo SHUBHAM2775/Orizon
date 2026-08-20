@@ -25,6 +25,7 @@ import {
   RuleBreakdownTable,
 } from "@/components/dashboard/eval-detail";
 import { cn } from "@/lib/utils";
+import { FileUploadSection } from "@/components/applications/file-upload";
 import type { Applicant } from "@/lib/mock-data";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -145,6 +146,8 @@ function AnalystContent() {
         title="Applications"
         meta="Analyst queue · mock data phase"
       />
+
+      <FileUploadSection />
 
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_420px] gap-6 items-start">
         {/* ── Left: applicant queue ─────────────────────────────────── */}
