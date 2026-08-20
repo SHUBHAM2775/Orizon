@@ -2,129 +2,166 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
+/*
+ * Design system — "The Case File"
+ * Source of truth: docs/design-system.md
+ *
+ * Constraints (do not violate):
+ *   - Seven palette tokens only (no additional hues).
+ *   - --approve / --reject / --exception reserved for decision states.
+ *   - No light/dark toggle — single paper-toned palette by design.
+ *   - Small radii (2–4px), no pills, no glassmorphism.
+ */
 
+/* --------------------------------------------------------------------------
+ * Tailwind theme — alias the CSS variables next/font/google will export,
+ * plus the seven design-system colors.
+ * -------------------------------------------------------------------------- */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  /* Fonts (consumed via Tailwind utilities: font-sans, font-mono, font-display) */
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-plex-mono);
+  --font-display: var(--font-fraunces);
+
+  /* Raw design-system palette */
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-brass: var(--brass);
+  --color-approve: var(--approve);
+  --color-reject: var(--reject);
+  --color-exception: var(--exception);
+
+  /* shadcn semantic mappings — re-skinned to the case-file palette so any
+   * shadcn primitive we drop in later still picks up the right tokens. */
+  --color-background: var(--paper);
+  --color-foreground: var(--ink);
+  --color-card: var(--paper);
+  --color-card-foreground: var(--ink);
+  --color-popover: var(--paper);
+  --color-popover-foreground: var(--ink);
+  --color-primary: var(--brass);
+  --color-primary-foreground: var(--paper);
+  --color-secondary: color-mix(in oklch, var(--paper), var(--ink) 6%);
+  --color-secondary-foreground: var(--ink);
+  --color-muted: color-mix(in oklch, var(--paper), var(--ink) 4%);
+  --color-muted-foreground: var(--ink-muted);
+  --color-accent: var(--brass);
+  --color-accent-foreground: var(--paper);
+  --color-destructive: var(--reject);
+  --color-destructive-foreground: var(--paper);
+  --color-border: color-mix(in oklch, var(--ink), transparent 85%);
+  --color-input: color-mix(in oklch, var(--ink), transparent 85%);
+  --color-ring: var(--brass);
+
+  /* Radii — overridden from shadcn defaults per design-system.md ("small,
+   * consistent radius 2–4px, reads as 'official document' not 'consumer app'"). */
+  --radius: 0.25rem; /* 4px */
+  --radius-sm: 0.125rem; /* 2px */
+  --radius-md: 0.25rem; /* 4px */
+  --radius-lg: 0.375rem; /* 6px cap; reserved for the stamp only */
+  --radius-xl: 0.5rem;
+  --radius-2xl: 0.75rem;
+  --radius-3xl: 1rem;
+  --radius-4xl: 1.5rem;
+
+  /* Sidebar tokens — shadcn wants these even though our sidebar is the
+   * folder-tab rail. Point them at paper so any future shadcn Sidebar
+   * component doesn't ship with a foreign background. */
+  --color-sidebar: var(--paper);
+  --color-sidebar-foreground: var(--ink);
+  --color-sidebar-primary: var(--brass);
+  --color-sidebar-primary-foreground: var(--paper);
+  --color-sidebar-accent: color-mix(in oklch, var(--paper), var(--ink) 6%);
+  --color-sidebar-accent-foreground: var(--ink);
+  --color-sidebar-border: color-mix(in oklch, var(--ink), transparent 85%);
+  --color-sidebar-ring: var(--brass);
+
+  /* Charts — kept as a muted ink ramp so a Recharts chart that forgets to
+   * set colors still reads "ledger", not "rainbow". */
+  --color-chart-1: var(--ink);
+  --color-chart-2: var(--ink-muted);
+  --color-chart-3: var(--brass);
+  --color-chart-4: var(--approve);
+  --color-chart-5: var(--exception);
 }
 
+/* --------------------------------------------------------------------------
+ * Design tokens (the seven colors + fonts)
+ * -------------------------------------------------------------------------- */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  /* Palette — case-file metaphor, ledger-green paper + near-black ink. */
+  --paper: #eef2ed;
+  --ink: #1c2622;
+  --ink-muted: #5b655f;
+  --brass: #b8862e;
+  --approve: #2f6b45;
+  --reject: #9c2b2b;
+  --exception: #b5791e;
+
+  /* Contrast notes:
+   *   #2F6B45 on #EEF2ED ≈ 5.2:1 (passes WCAG AA for body text)
+   *   #9C2B2B on #EEF2ED ≈ 6.1:1 (passes)
+   *   #B5791E on #EEF2ED ≈ 3.6:1 (fails for body — exception color is for
+   *     stamps/badges only, never body copy)
+   */
 }
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
-}
+/* No `.dark` block — single theme by design (see docs/design-system.md:
+ * "A full light/dark theme toggle ... would dilute the single paper-toned
+ * palette that gives the product its identity."). */
 
+/* --------------------------------------------------------------------------
+ * Base layer
+ * -------------------------------------------------------------------------- */
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    border-color: var(--color-border);
+    outline-color: color-mix(in oklch, var(--brass), transparent 50%);
   }
-  body {
-    @apply bg-background text-foreground;
-  }
+
   html {
-    @apply font-sans;
+    font-family: var(--font-geist-sans), system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    background-color: var(--paper);
+    color: var(--ink);
+    /* Subtle ledger-grain — a faint dot grid, not paper-texture noise.
+     * Stays well under contrast thresholds so it reads as paper, not pattern. */
+    background-image: radial-gradient(
+      color-mix(in oklch, var(--ink), transparent 92%) 0.5px,
+      transparent 0.5px
+    );
+    background-size: 24px 24px;
+    background-position: 0 0;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-fraunces), Georgia, serif;
+    letter-spacing: -0.01em;
+    font-weight: 600;
+  }
+
+  /* Tabular figures wherever the mono face is used — what makes columns
+   * of numbers align in applicant/rule/audit tables. */
+  .font-mono,
+  [class*="font-mono"] {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+}
+
+/* Respect prefers-reduced-motion globally. Step 1 ships no motion, but the
+ * stamp + folder-tab interactions in later steps will inherit this. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
   }
 }

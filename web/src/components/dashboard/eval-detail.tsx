@@ -1,0 +1,223 @@
+"use client";
+
+/**
+ * eval-detail.tsx — Evaluation detail panel: rule breakdown + decision stamp.
+ *
+ * Used by:
+ *   - Analyst dashboard: shows result after running an applicant
+ *   - Exception queue: approver sees same detail when making a decision
+ *
+ * Contains:
+ *   EvalSummaryCard   — top-level decision + eligible amount/rate (if approved)
+ *   RuleBreakdownTable — per-rule Pass/Fail grid with triggered rules highlighted
+ *   ApplicantProfileCard — the applicant's key metrics in an IndexCard
+ */
+
+import { cn } from "@/lib/utils";
+import { IndexCard, IndexCardHeader } from "@/components/ui/index-card";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { Stamp } from "@/components/ui/stamp";
+import type {
+  Evaluation,
+  Applicant,
+  EvaluationRuleResult,
+  DecisionOutcome,
+} from "@/lib/mock-data";
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function decisionToStampTone(d: DecisionOutcome) {
+  switch (d) {
+    case "APPROVED":       return "approve" as const;
+    case "HARD_REJECT":    return "reject" as const;
+    case "EXCEPTION_L1":   return "exception-l1" as const;
+    case "EXCEPTION_L2":   return "exception-l2" as const;
+  }
+}
+
+function decisionToBadgeTone(d: DecisionOutcome) {
+  switch (d) {
+    case "APPROVED":       return "approve" as const;
+    case "HARD_REJECT":    return "reject" as const;
+    case "EXCEPTION_L1":   return "exception-l1" as const;
+    case "EXCEPTION_L2":   return "exception-l2" as const;
+  }
+}
+
+function fmtINR(n: number) {
+  return "₹" + n.toLocaleString("en-IN");
+}
+
+function fmtOperator(op: string, threshold: number | boolean): string {
+  const val = typeof threshold === "boolean" ? (threshold ? "Yes" : "No") : threshold;
+  switch (op) {
+    case "gte": return `≥ ${val}`;
+    case "lte": return `≤ ${val}`;
+    case "gt":  return `> ${val}`;
+    case "lt":  return `< ${val}`;
+    case "eq":  return `= ${val}`;
+    case "neq": return `≠ ${val}`;
+    default: return String(val);
+  }
+}
+
+function fmtActual(val: number | boolean, field: string): string {
+  if (typeof val === "boolean") return val ? "Yes" : "No";
+  if (field === "loanAmount" || field === "avgMonthlyBalance" || field === "annualIncome") {
+    return fmtINR(val);
+  }
+  if (field === "foir") return `${val}%`;
+  return String(val);
+}
+
+// ─── ApplicantProfileCard ─────────────────────────────────────────────────────
+
+export function ApplicantProfileCard({ applicant }: { applicant: Applicant }) {
+  return (
+    <IndexCard tabTone="default" as="div">
+      <IndexCardHeader
+        title={applicant.name}
+        meta={`${applicant.id} · ${applicant.email}`}
+      />
+      <div className="grid grid-cols-2 gap-x-8 gap-y-1.5 mt-3">
+        <ProfileRow label="Requested amount" value={fmtINR(applicant.loanAmount)} mono />
+        <ProfileRow label="Tenure" value={`${applicant.tenureMonths} months`} mono />
+        <ProfileRow label="CIBIL score" value={String(applicant.cibilScore)} mono highlight />
+        <ProfileRow label="FOIR" value={`${applicant.foir}%`} mono highlight />
+        <ProfileRow label="Avg. monthly balance" value={fmtINR(applicant.avgMonthlyBalance)} mono />
+        <ProfileRow label="Annual income" value={fmtINR(applicant.annualIncome)} mono />
+        <ProfileRow label="EMI bounces (12M)" value={String(applicant.bounceCount)} mono />
+        <ProfileRow label="Write-off on record" value={applicant.hasWriteOff ? "Yes" : "No"} mono />
+      </div>
+    </IndexCard>
+  );
+}
+
+function ProfileRow({
+  label,
+  value,
+  mono = false,
+  highlight = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  highlight?: boolean;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-2 border-b border-[color-mix(in_oklch,var(--ink),transparent_93%)] py-1 last:border-0">
+      <span className="text-xs text-[var(--ink-muted)] flex-shrink-0">{label}</span>
+      <span
+        className={cn(
+          mono ? "font-mono text-xs" : "text-sm",
+          highlight ? "text-[var(--ink)] font-medium" : "text-[var(--ink)]",
+        )}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+// ─── EvalSummaryCard ──────────────────────────────────────────────────────────
+
+export function EvalSummaryCard({ evaluation, applicant }: { evaluation: Evaluation; applicant: Applicant }) {
+  const triggeredRules = evaluation.ruleResults.filter((r) => r.triggered);
+  const primaryReason = triggeredRules[0]?.explanation;
+
+  return (
+    <IndexCard tabTone={evaluation.finalDecision === "APPROVED" ? "approve" : evaluation.finalDecision === "HARD_REJECT" ? "reject" : "exception"} as="div">
+      <IndexCardHeader
+        title="Decision"
+        meta={`Eval ${evaluation.id} · ${new Date(evaluation.runAt).toLocaleString("en-IN")}`}
+        action={<StatusBadge tone={decisionToBadgeTone(evaluation.finalDecision)} />}
+      />
+
+      <div className="flex gap-10 items-start mt-4">
+        {/* Stamp — the one deliberate bold moment */}
+        <Stamp
+          tone={decisionToStampTone(evaluation.finalDecision)}
+          reason={primaryReason}
+        />
+
+        <div className="flex-1 space-y-3 mt-2">
+          {evaluation.finalDecision === "APPROVED" && evaluation.eligibleAmount && (
+            <>
+              <DetailRow label="Eligible amount" value={fmtINR(evaluation.eligibleAmount)} />
+              <DetailRow label="Interest rate band" value={evaluation.interestRateBand ?? "—"} />
+            </>
+          )}
+          <DetailRow label="Rules evaluated" value={String(evaluation.ruleResults.length)} />
+          <DetailRow label="Rules triggered" value={String(triggeredRules.length)} />
+          <DetailRow label="Rules version" value={`v${evaluation.rulesVersion}`} />
+          <DetailRow label="Run by" value={evaluation.runBy} />
+        </div>
+      </div>
+    </IndexCard>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className="text-xs text-[var(--ink-muted)] w-32 flex-shrink-0">{label}</span>
+      <span className="font-mono text-xs text-[var(--ink)]">{value}</span>
+    </div>
+  );
+}
+
+// ─── RuleBreakdownTable ───────────────────────────────────────────────────────
+
+export function RuleBreakdownTable({ results }: { results: EvaluationRuleResult[] }) {
+  return (
+    <IndexCard tabTone="default" as="div">
+      <IndexCardHeader
+        title="Rule Breakdown"
+        meta={`${results.filter((r) => r.triggered).length} of ${results.length} rules triggered`}
+      />
+      <div className="-mx-6 -mb-6 mt-4 border-t border-[color-mix(in_oklch,var(--ink),transparent_85%)] overflow-x-auto">
+        {/* Header */}
+        <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 px-6 py-2 bg-[color-mix(in_oklch,var(--paper),var(--ink)_3%)] border-b border-[color-mix(in_oklch,var(--ink),transparent_88%)]">
+          {["Rule", "Condition", "Actual", "Outcome", "Result"].map((h) => (
+            <span key={h} className="font-mono text-[10px] uppercase tracking-wider text-[var(--ink-muted)]">{h}</span>
+          ))}
+        </div>
+        {/* Rows */}
+        {results.map((r) => (
+          <div
+            key={r.ruleId}
+            className={cn(
+              "grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 items-center px-6 py-2.5 border-b border-[color-mix(in_oklch,var(--ink),transparent_92%)] last:border-0",
+              r.triggered && "bg-[color-mix(in_oklch,var(--reject),transparent_96%)]",
+            )}
+          >
+            <div className="min-w-0">
+              <p className="text-xs text-[var(--ink)] font-medium truncate">{r.ruleName}</p>
+              <p className="font-mono text-[10px] text-[var(--ink-muted)]">{r.reasonCode}</p>
+            </div>
+            <span className="font-mono text-xs text-[var(--ink-muted)] whitespace-nowrap">
+              {fmtOperator(r.operator, r.thresholdAtEvaluation)}
+            </span>
+            <span className="font-mono text-xs text-[var(--ink)] whitespace-nowrap">
+              {fmtActual(r.actualValue, "")}
+            </span>
+            <span className={cn(
+              "font-mono text-[10px] uppercase tracking-wider whitespace-nowrap",
+              r.outcome === "HARD_REJECT" ? "text-[var(--reject)]" : "text-[var(--exception)]",
+            )}>
+              {r.outcome.replace("_", " ")}
+            </span>
+            <span
+              className={cn(
+                "font-mono text-[10px] uppercase tracking-wider whitespace-nowrap",
+                r.triggered ? "text-[var(--reject)]" : "text-[var(--approve)]",
+              )}
+            >
+              {r.triggered ? "TRIGGERED" : "PASS"}
+            </span>
+          </div>
+        ))}
+      </div>
+    </IndexCard>
+  );
+}
