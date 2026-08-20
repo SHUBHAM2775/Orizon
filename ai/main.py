@@ -12,6 +12,8 @@ and aggregates everything into one Master Profile + Decision.
 
 import os
 import sys
+from dotenv import load_dotenv
+load_dotenv()
 import time
 import json
 import pandas as pd
@@ -19,6 +21,7 @@ from io import BytesIO
 
 from ingestion.mapper import map_structured_input
 from engine.engine import run_bre
+from engine.xai import generate_xai_explanation
 from core.models import NormalizedApplicantProfile, StructuredRow
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
@@ -110,6 +113,9 @@ def process_structured_folder(folder_path: str):
 
   # Run decision engine
   decision_report = run_bre(final_profile)
+  
+  # Generate XAI Explanation
+  decision_report = generate_xai_explanation(final_profile, decision_report)
 
   # Save & print results
   timestamp = int(time.time())
@@ -171,6 +177,9 @@ def process_pdf_folder(folder_path: str):
   # Run decision engine
   decision_report = run_bre(final_profile)
 
+  # Generate XAI Explanation
+  decision_report = generate_xai_explanation(final_profile, decision_report)
+
   # Save & print results
   timestamp = int(time.time())
   result = {
@@ -205,8 +214,10 @@ def _print_results(profile, decision, filepath):
   print(f"\n  Applicant ID  : {profile.applicantId}")
   print(f"  Decision      : {decision.finalDecision}")
   print(f"  Risk Grade    : {decision.riskGrade}")
-  print(f"  Eligible Amt  : {decision.eligibleAmount}")
+  print(f"  Max Elig. Amt : {decision.maxEligibleAmount}")
+  print(f"  Req. Eligible : {decision.isEligibleForRequested}")
   print(f"  Interest Band : {decision.interestRateBand}")
+  print(f"  Escalation    : {decision.escalationAuthority}")
   
   # Show triggered rules
   triggered = [r for r in decision.ruleEvaluations if r.outcome != "PASS"]
@@ -214,6 +225,16 @@ def _print_results(profile, decision, filepath):
     print(f"\n  Triggered Rules:")
     for r in triggered:
       print(f"    - [{r.ruleId}] {r.description} (observed: {r.observedValue}, threshold: {r.threshold})")
+      
+  # Show XAI Explanations
+  if decision.xaiMemo:
+    print("\n  ================ EXPLAINABILITY MEMO ================")
+    print(f"  {decision.xaiMemo}")
+    if decision.actionableSteps:
+      print("\n  Actionable Steps:")
+      for step in decision.actionableSteps:
+        print(f"    -> {step}")
+    print("  ===================================================")
   
   print(f"\n  Full result saved to: {filepath}")
   

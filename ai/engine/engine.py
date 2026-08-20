@@ -133,24 +133,33 @@ def run_bre(profile: NormalizedApplicantProfile) -> DecisionReport:
         reason="Bureau score in lower bands" if b_outcome != "PASS" else None
     ))
 
-    # 6. Aggregate Outcomes (Exceptions)
+    # 6. Conflict Handling & Escalation Matrix
+    # Rule 1: Hard Reject (Step 3/4) short-circuits. Pricing/scoring can NEVER override a hard reject.
+    # Rule 2: Escalation based on deviation count.
     final_decision = "APPROVE"
+    escalation_authority = "SYSTEM_AUTO"
+    
     if deviations >= 2:
         final_decision = "L2_EXCEPTION"
+        escalation_authority = "VP_CREDIT"
     elif deviations == 1:
         final_decision = "L1_EXCEPTION"
+        escalation_authority = "CREDIT_MANAGER"
         
     # 7. Loan Sizing & Pricing
     pricing = policy.get("pricing", {})
-    # declaredIncome from ITR is already annual. From salary slip it may be monthly gross.
-    # The reconciler's max-wins ensures the ITR (larger) value wins, so treat as annual.
     annual_income = profile.declaredIncome or 0
     max_by_income = annual_income * pricing.get("income_multiplier", 5)
     max_by_cap = pricing.get("max_loan_cap", 5000000)
-    requested = profile.requestedLoanAmount or max_by_income  # if no request, size to max eligible
     
-    eligible = min(max_by_income, max_by_cap, requested)
+    max_eligible = min(max_by_income, max_by_cap)
     
+    requested = profile.requestedLoanAmount
+    is_eligible_for_requested = None
+    if requested is not None:
+        is_eligible_for_requested = requested <= max_eligible
+    
+    # Pricing conflict handling: Grade D overrides standard pricing
     risk_grade = "A"
     rate_band = pricing.get("rates", {}).get("A", "10-12%")
     if deviations >= 2:
@@ -163,8 +172,10 @@ def run_bre(profile: NormalizedApplicantProfile) -> DecisionReport:
     return DecisionReport(
         applicantId=profile.applicantId,
         finalDecision=final_decision,
+        escalationAuthority=escalation_authority,
         riskGrade=risk_grade,
-        eligibleAmount=round(eligible, 2),
+        maxEligibleAmount=round(max_eligible, 2),
+        isEligibleForRequested=is_eligible_for_requested,
         interestRateBand=rate_band,
         ruleEvaluations=evaluations
     )

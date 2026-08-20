@@ -62,7 +62,11 @@ class RuleEvaluation(BaseModel):
 class DecisionReport(BaseModel):
   applicantId: str
   finalDecision: Literal["APPROVE", "L1_EXCEPTION", "L2_EXCEPTION", "HARD_REJECT", "INSUFFICIENT_DATA"]
+  escalationAuthority: Optional[str] = None
   riskGrade: Optional[str] = None
-  eligibleAmount: Optional[float] = None
+  maxEligibleAmount: Optional[float] = None
+  isEligibleForRequested: Optional[bool] = None
   interestRateBand: Optional[str] = None
   ruleEvaluations: List[RuleEvaluation] = []
+  xaiMemo: Optional[str] = None
+  actionableSteps: List[str] = []
