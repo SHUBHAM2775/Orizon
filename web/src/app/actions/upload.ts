@@ -10,8 +10,8 @@ const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://localhost:8000";
  */
 export async function processStructuredFileAction(formData: FormData) {
   try {
-    const file = formData.get("file") as File;
-    if (!file) return { error: "No file provided" };
+    const files = formData.getAll("files") as File[];
+    if (!files || files.length === 0) return { error: "No files provided" };
     
     // Call Python FastAPI
     let response;
@@ -28,32 +28,62 @@ export async function processStructuredFileAction(formData: FormData) {
       let errorMsg = `Python API error: ${response.statusText}`;
       try {
         const errorData = await response.json();
-        if (errorData.detail) errorMsg = errorData.detail;
+        if (errorData.detail) {
+          if (Array.isArray(errorData.detail)) {
+            errorMsg = errorData.detail.map((e: any) => e.msg || JSON.stringify(e)).join(", ");
+          } else {
+            errorMsg = typeof errorData.detail === "string" ? errorData.detail : JSON.stringify(errorData.detail);
+          }
+        }
       } catch (e) {}
       return { error: errorMsg };
     }
     
-    const profile = await response.json();
+    const profiles = await response.json();
     
-    // Map profile to applicantData shape
-    const applicantData = {
-      applicant_ref: profile.applicantId,
-      age: profile.age,
-      employment_type: profile.employmentType,
-      requested_amount: profile.requestedLoanAmount,
-      tenure_months: profile.requestedTenure,
-      monthly_income: profile.declaredIncome ? profile.declaredIncome / 12 : undefined,
-      cibil_score: profile.bureauScore,
-      existing_emi: profile.emiDebits,
-      avg_bank_balance: profile.bankAvgBalance ?? profile.bankAvgCredits,
-      bounce_count: profile.bounceCount,
-      last_default: profile.writeOffFlag || profile.defaultFlag,
-      income_trend: profile.incomeTrend,
-      assets_value: profile.declaredAssets,
-      ...profile // include the raw extraction for raw_input_json
-    };
+    // The API now returns a list of profiles
+    if (!Array.isArray(profiles)) {
+      return { error: "Unexpected response from API (expected list of profiles)." };
+    }
+
+    let successCount = 0;
+    let failedCount = 0;
+    let errors = [];
+
+    for (const profile of profiles) {
+      const applicantData = {
+        applicant_ref: profile.applicantId,
+        age: profile.age,
+        employment_type: profile.employmentType,
+        requested_amount: profile.requestedLoanAmount,
+        tenure_months: profile.requestedTenure,
+        monthly_income: profile.declaredIncome ? profile.declaredIncome / 12 : undefined,
+        cibil_score: profile.bureauScore,
+        existing_emi: profile.emiDebits,
+        avg_bank_balance: profile.bankAvgBalance ?? profile.bankAvgCredits,
+        bounce_count: profile.bounceCount,
+        last_default: profile.writeOffFlag || profile.defaultFlag,
+        income_trend: profile.incomeTrend,
+        assets_value: profile.declaredAssets,
+        ...profile // include the raw extraction for raw_input_json
+      };
+      
+      const res = await submitApplicantAction(applicantData);
+      if (res.error) {
+        if (!res.error.includes("already exists")) {
+          errors.push(`Failed for ${profile.applicantId || 'unknown'}: ${res.error}`);
+        }
+        failedCount++;
+      } else {
+        successCount++;
+      }
+    }
     
-    return submitApplicantAction(applicantData);
+    if (successCount === 0 && failedCount > 0) {
+       return { error: `Failed to import any applicants. Errors: ${errors.join('; ')}` };
+    }
+
+    return { success: true, message: `Successfully imported ${successCount} applicant(s). ${failedCount > 0 ? `(${failedCount} ignored or failed)` : ''}` };
   } catch (error: any) {
     console.error("Error processing structured file:", error);
     return { error: "An unexpected error occurred while processing the file." };
@@ -66,8 +96,8 @@ export async function processStructuredFileAction(formData: FormData) {
  */
 export async function processPdfFileAction(formData: FormData) {
   try {
-    const file = formData.get("file") as File;
-    if (!file) return { error: "No file provided" };
+    const files = formData.getAll("files") as File[];
+    if (!files || files.length === 0) return { error: "No files provided" };
     
     // Call Python FastAPI
     let response;
@@ -84,13 +114,19 @@ export async function processPdfFileAction(formData: FormData) {
       let errorMsg = `Python API error: ${response.statusText}`;
       try {
         const errorData = await response.json();
-        if (errorData.detail) errorMsg = errorData.detail;
+        if (errorData.detail) {
+          if (Array.isArray(errorData.detail)) {
+            errorMsg = errorData.detail.map((e: any) => e.msg || JSON.stringify(e)).join(", ");
+          } else {
+            errorMsg = typeof errorData.detail === "string" ? errorData.detail : JSON.stringify(errorData.detail);
+          }
+        }
       } catch (e) {}
       return { error: errorMsg };
     }
     
-    const profile = await response.json();
-    return { success: true, profile };
+    const profiles = await response.json();
+    return { success: true, profiles };
   } catch (error: any) {
     console.error("Error processing PDF file:", error);
     return { error: "An unexpected error occurred while processing the PDF file." };
@@ -155,5 +191,56 @@ export async function submitApplicantAction(applicantData: Record<string, any>) 
   } catch (error: any) {
     console.error("Error submitting applicant data:", error);
     return { error: error.message || "Failed to submit applicant data" };
+  }
+}
+
+/**
+ * Deletes an applicant from the Supabase database.
+ */
+export async function deleteApplicantAction(id: string) {
+  try {
+    const { createClient: createSupabaseClient } = await import("@supabase/supabase-js");
+    const supabaseAdmin = createSupabaseClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+    
+    // 1. Find all evaluations for this applicant (Bypassing RLS)
+    const { data: evals } = await supabaseAdmin
+      .from("evaluations")
+      .select("id")
+      .eq("applicant_id", id);
+
+    // 2. Delete rule results for those evaluations first
+    if (evals && evals.length > 0) {
+      for (const ev of evals) {
+        await supabaseAdmin
+          .from("evaluation_rule_results")
+          .delete()
+          .eq("evaluation_id", ev.id);
+      }
+      
+      // 3. Delete the evaluations
+      await supabaseAdmin
+        .from("evaluations")
+        .delete()
+        .eq("applicant_id", id);
+    }
+
+    // 4. Finally, delete the applicant
+    const { error } = await supabaseAdmin
+      .from("applicants")
+      .delete()
+      .eq("id", id);
+
+    if (error) {
+      console.error("Supabase delete error:", error);
+      return { error: error.message };
+    }
+
+    return { success: true };
+  } catch (error: any) {
+    console.error("Error deleting applicant:", error);
+    return { error: error.message || "Failed to delete applicant" };
   }
 }

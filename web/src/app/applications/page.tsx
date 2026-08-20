@@ -17,6 +17,7 @@
 
 import { useEffect, useState, useMemo, useTransition } from "react";
 import { runEvaluationAction, getEvaluationsAction, getEvaluationRuleResultsAction } from "@/app/actions/evaluate";
+import { deleteApplicantAction } from "@/app/actions/upload";
 import { createClient } from "@/lib/supabase/client";
 import { RoleGuard } from "@/components/dashboard/role-guard";
 import { DashboardShell } from "@/components/dashboard/shell";
@@ -140,6 +141,7 @@ function AnalystContent() {
   const [evaluationRows, setEvaluationRows] = useState<EvaluationRow[] | null>(null);
   const [evaluationsError, setEvaluationsError] = useState<string | null>(null);
   const [refetchKey, setRefetchKey] = useState(0);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     async function loadUser() {
@@ -208,6 +210,21 @@ function AnalystContent() {
   }, [supabase, refetchKey]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const handleDeleteApplicant = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this applicant?")) return;
+    setIsDeleting(true);
+    try {
+      const res = await deleteApplicantAction(id);
+      if (res.error) alert("Failed to delete: " + res.error);
+      else {
+        setRefetchKey(k => k + 1);
+        if (selectedId === id) setSelectedId(null);
+      }
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   // Map DB rows → legacy Applicant shape for the UI.
   const applicants = useMemo<Applicant[]>(
@@ -465,6 +482,16 @@ function AnalystContent() {
         {/* ── Right: detail panel ───────────────────────────────────── */}
         {selectedApplicant ? (
           <div className="space-y-4">
+            <div className="flex justify-between items-end">
+              <h2 className="font-medium text-lg text-[var(--ink)]">Profile Details</h2>
+              <button 
+                onClick={() => handleDeleteApplicant(selectedRow!.id)} 
+                disabled={isDeleting}
+                className="text-xs text-[var(--reject)] font-medium hover:underline disabled:opacity-50"
+              >
+                {isDeleting ? "Deleting..." : "Delete Applicant"}
+              </button>
+            </div>
             <ApplicantProfileCard applicant={selectedApplicant} />
 
             {/* Evaluation section: real if available, else explicit empty state */}

@@ -54,7 +54,7 @@ def parse_document(filepath: str, groq_api_key: str = None) -> StructuredRow:
     client = Groq(api_key=groq_api_key)
 
     system_prompt = """You are a financial document extraction AI for a credit underwriting system.
-The user will provide text from a financial document (ITR, bank statement, salary slip, etc.).
+The user will provide text from a financial document (ITR, bank statement, salary slip, application form etc.).
 The text has been PII-masked — identity fields contain tokens like <<PERSON_abc123>> or <<IN_PAN_def456>>. 
 This is intentional. Extract the token as-is for identity fields.
 
@@ -65,16 +65,17 @@ Fields to extract:
 {
   "applicantName": "string or PII token",
   "pan": "string or PII token",
-  "declaredIncome": number (annual gross total income),
-  "grossSalary": number,
-  "netSalary": number,
-  "incomeFromHouseProperty": number,
-  "incomeFromOtherSources": number,
-  "totalDeductions": number,
-  "totalTaxableIncome": number,
-  "totalTaxPaid": number,
+  "age": number,
   "employmentType": "Salaried" or "Self-Employed" or null,
+  "requestedLoanAmount": number,
+  "requestedTenure": number,
+  "declaredIncome": number (annual gross total income),
+  "emiDebits": number (existing monthly EMI),
+  "bureauScore": number (CIBIL score),
+  "bankAvgBalance": number,
+  "bounceCount": number,
   "declaredAssets": number,
+  "writeOffFlag": boolean (true if default/writeoff mentioned),
   "itrIncomeLastTwoYears": [number, number] or null
 }"""
 
@@ -103,9 +104,17 @@ Fields to extract:
         
         # Build StructuredRow from extracted fields
         return StructuredRow(
-            declaredIncome=extracted.get("declaredIncome"),
+            age=extracted.get("age"),
             employmentType=extracted.get("employmentType"),
+            requestedLoanAmount=extracted.get("requestedLoanAmount"),
+            requestedTenure=extracted.get("requestedTenure"),
+            declaredIncome=extracted.get("declaredIncome"),
+            emiDebits=extracted.get("emiDebits"),
+            bureauScore=extracted.get("bureauScore"),
+            bankAvgBalance=extracted.get("bankAvgBalance"),
+            bounceCount=extracted.get("bounceCount"),
             declaredAssets=extracted.get("declaredAssets"),
+            writeOffFlag=extracted.get("writeOffFlag") or False,
             itrIncomeLastTwoYears=extracted.get("itrIncomeLastTwoYears") or [],
         )
         
