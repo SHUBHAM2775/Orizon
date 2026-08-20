@@ -17,10 +17,11 @@
  *   - Main scrollable content area
  */
 
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useState, useEffect, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { useMockAuth } from "@/lib/mock-auth";
+import { signOut } from "@/app/actions/auth";
+import { createClient } from "@/lib/supabase/client";
 import {
   FolderTabSidebar,
   FolderTab,
@@ -143,12 +144,34 @@ export interface DashboardShellProps {
 export function DashboardShell({ children }: DashboardShellProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const { currentUser, logout } = useMockAuth();
+  const supabase = createClient();
 
-  const handleLogout = useCallback(() => {
-    logout();
+  const [currentUser, setCurrentUser] = useState<{ name: string; role: string; originalRole: string } | null>(null);
+
+  useEffect(() => {
+    async function loadUser() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: userData } = await supabase
+        .from("users")
+        .select("name, role")
+        .eq("email", user.email)
+        .single();
+      
+      if (userData) {
+        // Map db role format to UI format so tabs work
+        const mappedRole = userData.role.toLowerCase().replace("_", "-");
+        setCurrentUser({ name: userData.name, role: mappedRole, originalRole: userData.role });
+      }
+    }
+    loadUser();
+  }, [supabase]);
+
+  const handleLogout = useCallback(async () => {
+    await signOut();
     router.push("/");
-  }, [logout, router]);
+  }, [router]);
 
   const handleTabClick = useCallback(
     (href: string) => {
@@ -182,7 +205,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
           <div className="text-right">
             <p className="text-xs text-[var(--ink)]">{currentUser.name}</p>
             <p className="font-mono text-[10px] text-[var(--ink-muted)] uppercase tracking-wider">
-              {currentUser.role}
+              {currentUser.originalRole}
             </p>
           </div>
           <button

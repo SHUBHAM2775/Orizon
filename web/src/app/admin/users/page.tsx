@@ -10,15 +10,14 @@
  *   - All creates are appended to the audit log
  */
 
-import { useState, useCallback } from "react";
-import { useStore } from "@/lib/mock-store";
-import { useMockAuth } from "@/lib/mock-auth";
+import { useState, useCallback, useEffect } from "react";
 import { RoleGuard } from "@/components/dashboard/role-guard";
 import { DashboardShell } from "@/components/dashboard/shell";
 import { IndexCard, IndexCardHeader } from "@/components/ui/index-card";
 import { cn } from "@/lib/utils";
-import type { MockUser } from "@/lib/mock-data";
-import type { UserRole } from "@/lib/mock-users";
+import { createClient } from "@/lib/supabase/client";
+import { createUserAction } from "@/app/actions/admin";
+import type { DbUserRole } from "@/lib/auth-utils";
 
 export default function AdminUsersPage() {
   return (
@@ -31,26 +30,55 @@ export default function AdminUsersPage() {
 }
 
 const ROLE_LABELS: Record<string, string> = {
-  analyst: "Analyst",
-  "l1-approver": "L1 Approver",
-  "l2-approver": "L2 / Credit Head",
-  admin: "Admin",
+  ANALYST: "Analyst",
+  L1_APPROVER: "L1 Approver",
+  L2_APPROVER: "L2 / Credit Head",
+  ADMIN: "Admin",
 };
 
+interface DbUser {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  status: string;
+}
+
 function UsersContent() {
-  const { users, createUser } = useStore();
-  const { currentUser } = useMockAuth();
+  const supabase = createClient();
+  const [users, setUsers] = useState<DbUser[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(true);
 
   const [showForm, setShowForm] = useState(false);
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
-  const [role, setRole] = useState<UserRole>("analyst");
-  const [createdUser, setCreatedUser] = useState<MockUser | null>(null);
+  const [role, setRole] = useState<string>("analyst");
+  
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [createdUser, setCreatedUser] = useState<DbUser | null>(null);
   const [emailError, setEmailError] = useState("");
+  const [formError, setFormError] = useState("");
 
-  const handleCreate = useCallback(() => {
-    if (!currentUser) return;
+  const loadUsers = useCallback(async () => {
+    setLoadingUsers(true);
+    const { data, error } = await supabase
+      .from("users")
+      .select("id, email, name, role, status")
+      .order("created_at", { ascending: false });
+
+    if (data && !error) {
+      setUsers(data);
+    }
+    setLoadingUsers(false);
+  }, [supabase]);
+
+  useEffect(() => {
+    loadUsers();
+  }, [loadUsers]);
+
+  const handleCreate = useCallback(async () => {
     setEmailError("");
+    setFormError("");
 
     if (!email.trim() || !email.includes("@")) {
       setEmailError("Enter a valid email address.");
@@ -58,26 +86,34 @@ function UsersContent() {
     }
     if (!name.trim()) return;
 
-    const newUser: Omit<MockUser, "id" | "createdAt"> = {
+    setIsSubmitting(true);
+    
+    const res = await createUserAction(email.trim(), name.trim(), role);
+    
+    if (res.error) {
+      setFormError(res.error);
+      setIsSubmitting(false);
+      return;
+    }
+
+    // Success
+    setCreatedUser({
+      id: "pending",
       email: email.trim(),
       name: name.trim(),
-      role,
-      status: "PENDING_SETUP",
-      createdBy: currentUser.email,
-    };
-
-    createUser(newUser, currentUser.email);
-    setCreatedUser({ ...newUser, id: "pending", createdAt: new Date().toISOString() });
+      role: role.toUpperCase().replace("-", "_"),
+      status: "PENDING_SETUP"
+    });
+    
     setEmail("");
     setName("");
     setRole("analyst");
     setShowForm(false);
-  }, [email, name, role, currentUser, createUser]);
-
-  // Simulate a tokenized activation link
-  const mockActivationLink = createdUser
-    ? `${typeof window !== "undefined" ? window.location.origin : ""}/?token=mock_${Date.now()}`
-    : null;
+    setIsSubmitting(false);
+    
+    // Refresh list
+    loadUsers();
+  }, [email, name, role, loadUsers]);
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -94,19 +130,18 @@ function UsersContent() {
         </button>
       </div>
 
-      {/* Success: mock activation link */}
-      {createdUser && mockActivationLink && (
+      {/* Success Notice */}
+      {createdUser && !showForm && (
         <IndexCard tabTone="approve" as="div">
           <p className="font-mono text-xs text-[var(--approve)] uppercase tracking-wider mb-2">
-            User created · Mock email sent
+            User created · Activation email sent
           </p>
-          <p className="text-sm text-[var(--ink)] mb-3">
+          <p className="text-sm text-[var(--ink)] mb-1">
             Account created for <strong>{createdUser.email}</strong> ({ROLE_LABELS[createdUser.role]}).
-            In production, an activation email would be sent. Mock link:
           </p>
-          <code className="block font-mono text-xs text-[var(--ink)] bg-[color-mix(in_oklch,var(--paper),var(--ink)_5%)] border border-[color-mix(in_oklch,var(--ink),transparent_85%)] rounded-[var(--radius-sm)] px-3 py-2 break-all">
-            {mockActivationLink}
-          </code>
+          <p className="text-xs text-[var(--ink-muted)]">
+            An activation link valid for 48 hours has been emailed to the user.
+          </p>
         </IndexCard>
       )}
 
@@ -115,6 +150,11 @@ function UsersContent() {
         <IndexCard tabTone="brass" as="div">
           <IndexCardHeader title="Create New User" meta="Admin-provisioned accounts only" />
           <div className="space-y-4 mt-4">
+            {formError && (
+              <div className="bg-[color-mix(in_oklch,var(--reject),transparent_90%)] text-[var(--reject)] p-3 text-sm rounded-[var(--radius-sm)]">
+                {formError}
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <FormField label="Full name" error="">
                 <input
@@ -143,7 +183,7 @@ function UsersContent() {
             <FormField label="Role" error="">
               <select
                 value={role}
-                onChange={(e) => setRole(e.target.value as UserRole)}
+                onChange={(e) => setRole(e.target.value)}
                 className="w-full bg-[var(--paper)] border border-[color-mix(in_oklch,var(--ink),transparent_75%)] rounded-[var(--radius-sm)] px-3 py-2 text-sm text-[var(--ink)] focus:outline-none focus:ring-1 focus:ring-[var(--brass)]"
               >
                 <option value="analyst">Analyst</option>
@@ -154,9 +194,10 @@ function UsersContent() {
             </FormField>
             <button
               onClick={handleCreate}
-              className="bg-[var(--brass)] text-[var(--paper)] border border-[var(--brass)] rounded-[var(--radius-sm)] px-4 py-2.5 text-sm font-medium hover:bg-[color-mix(in_oklch,var(--brass),var(--ink)_18%)] transition-colors"
+              disabled={isSubmitting}
+              className="bg-[var(--brass)] text-[var(--paper)] border border-[var(--brass)] rounded-[var(--radius-sm)] px-4 py-2.5 text-sm font-medium hover:bg-[color-mix(in_oklch,var(--brass),var(--ink)_18%)] transition-colors disabled:opacity-50"
             >
-              Create account & send activation link
+              {isSubmitting ? "Creating..." : "Create account & send activation link"}
             </button>
           </div>
         </IndexCard>
@@ -164,7 +205,7 @@ function UsersContent() {
 
       {/* Users table */}
       <IndexCard tabTone="default" as="div">
-        <IndexCardHeader title="All Users" meta={`${users.length} accounts`} />
+        <IndexCardHeader title="All Users" meta={loadingUsers ? "Loading..." : `${users.length} accounts`} />
         <div className="-mx-6 -mb-6 mt-4 border-t border-[color-mix(in_oklch,var(--ink),transparent_85%)]">
           <div className="grid grid-cols-[1fr_1fr_auto_auto] gap-x-4 px-6 py-2 bg-[color-mix(in_oklch,var(--paper),var(--ink)_3%)] border-b border-[color-mix(in_oklch,var(--ink),transparent_88%)]">
             {["Name", "Email", "Role", "Status"].map((h) => (

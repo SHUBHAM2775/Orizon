@@ -15,12 +15,13 @@
  *   - Closed cases shown in a separate section (collapsed by default)
  */
 
-import { useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
+import { createClient } from "@/lib/supabase/client";
 import { useStore } from "@/lib/mock-store";
-import { useMockAuth } from "@/lib/mock-auth";
 import { RoleGuard } from "@/components/dashboard/role-guard";
 import { DashboardShell } from "@/components/dashboard/shell";
 import { IndexCard, IndexCardHeader } from "@/components/ui/index-card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import {
   ApplicantProfileCard,
@@ -50,16 +51,37 @@ function ExceptionQueueContent() {
     escalateException,
     latestEvaluation,
   } = useStore();
-  const { currentUser } = useMockAuth();
 
+  const [currentUser, setCurrentUser] = useState<{ email: string; role: string; name?: string } | null>(null);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [actionDone, setActionDone] = useState<string | null>(null);
 
-  if (!currentUser) return null;
+  const supabase = createClient();
+
+  useEffect(() => {
+    async function loadUser() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.email) return;
+
+      const { data: userData } = await supabase
+        .from("users")
+        .select("name, role")
+        .eq("email", user.email)
+        .single();
+      
+      if (userData) {
+        const mappedRole = userData.role.toLowerCase().replace("_", "-");
+        setCurrentUser({ email: user.email, role: mappedRole, name: userData.name });
+      }
+    }
+    loadUser();
+  }, [supabase]);
+
+
 
   const myLevel: "L1" | "L2" =
-    currentUser.role === "l2-approver" ? "L2" : "L1";
+    currentUser?.role === "l2-approver" ? "L2" : "L1";
 
   const pendingCases = exceptionCases.filter(
     (c) =>
@@ -105,6 +127,46 @@ function ExceptionQueueContent() {
     setActionDone(null);
     setNotes("");
   }, []);
+
+  if (!currentUser) {
+    return (
+      <div className="space-y-6 max-w-6xl">
+        <div className="border-b border-[color-mix(in_oklch,var(--ink),transparent_88%)] pb-4">
+          <Skeleton className="h-3 w-48 mb-2" />
+          <Skeleton className="h-8 w-64" />
+        </div>
+        <div className="grid grid-cols-1 xl:grid-cols-[1fr_440px] gap-6 items-start">
+          <div className="space-y-4">
+            <IndexCard tabTone="exception" as="div">
+              <div className="space-y-4 pb-2">
+                <Skeleton className="h-5 w-48" />
+                <Skeleton className="h-4 w-32" />
+              </div>
+              <div className="-mx-6 -mb-6 mt-4 border-t border-[color-mix(in_oklch,var(--ink),transparent_85%)]">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="flex items-center justify-between gap-4 px-6 py-4 border-b border-[color-mix(in_oklch,var(--ink),transparent_92%)]">
+                    <div className="space-y-2">
+                      <Skeleton className="h-4 w-32" />
+                      <Skeleton className="h-3 w-24" />
+                    </div>
+                    <Skeleton className="h-6 w-16" />
+                  </div>
+                ))}
+              </div>
+            </IndexCard>
+          </div>
+          <div className="space-y-4">
+            <IndexCard tabTone="default" as="div">
+              <div className="space-y-4">
+                <Skeleton className="h-24 w-full" />
+                <Skeleton className="h-24 w-full" />
+              </div>
+            </IndexCard>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-6xl">

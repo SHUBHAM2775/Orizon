@@ -11,12 +11,13 @@
  *   - Role-gated: analyst only
  */
 
-import { useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
+import { createClient } from "@/lib/supabase/client";
 import { useStore } from "@/lib/mock-store";
-import { useMockAuth } from "@/lib/mock-auth";
 import { RoleGuard } from "@/components/dashboard/role-guard";
 import { DashboardShell } from "@/components/dashboard/shell";
 import { IndexCard, IndexCardHeader } from "@/components/ui/index-card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import {
   ApplicantProfileCard,
@@ -58,7 +59,29 @@ export default function ApplicationsDashboard() {
 
 function AnalystContent() {
   const { applicants, runEvaluation, latestEvaluation } = useStore();
-  const { currentUser } = useMockAuth();
+  const [currentUser, setCurrentUser] = useState<{ email: string; role: string; name?: string } | null>(null);
+  const supabase = createClient();
+
+  useEffect(() => {
+    async function loadUser() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.email) return;
+
+      const { data: userData } = await supabase
+        .from("users")
+        .select("name, role")
+        .eq("email", user.email)
+        .single();
+      
+      if (userData) {
+        const mappedRole = userData.role.toLowerCase().replace("_", "-");
+        setCurrentUser({ email: user.email, role: mappedRole, name: userData.name });
+      }
+    }
+    loadUser();
+  }, [supabase]);
+
+
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -75,6 +98,47 @@ function AnalystContent() {
     setIsRunning(false);
   }, [selectedId, currentUser, runEvaluation]);
 
+  if (!currentUser) {
+    return (
+      <div className="space-y-6 max-w-6xl">
+        <div className="border-b border-[color-mix(in_oklch,var(--ink),transparent_88%)] pb-4">
+          <Skeleton className="h-8 w-48 mb-2" />
+          <Skeleton className="h-4 w-64" />
+        </div>
+        <div className="grid grid-cols-1 xl:grid-cols-[1fr_420px] gap-6 items-start">
+          <IndexCard tabTone="default" as="div">
+            <div className="space-y-4 pb-2">
+              <Skeleton className="h-5 w-48" />
+              <Skeleton className="h-4 w-32" />
+            </div>
+            <div className="-mx-6 -mb-6 mt-4 border-t border-[color-mix(in_oklch,var(--ink),transparent_85%)] overflow-x-auto">
+              <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-x-4 px-6 py-2 bg-[color-mix(in_oklch,var(--paper),var(--ink)_3%)] border-b border-[color-mix(in_oklch,var(--ink),transparent_88%)]">
+                <Skeleton className="h-3 w-8" />
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-3 w-16" />
+                <Skeleton className="h-3 w-12" />
+                <Skeleton className="h-3 w-16" />
+              </div>
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="w-full grid grid-cols-[auto_1fr_auto_auto_auto] gap-x-4 items-center px-6 py-4 border-b border-[color-mix(in_oklch,var(--ink),transparent_92%)]">
+                  <Skeleton className="h-4 w-12" />
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-4 w-20" />
+                  <Skeleton className="h-4 w-12" />
+                  <Skeleton className="h-6 w-20" />
+                </div>
+              ))}
+            </div>
+          </IndexCard>
+          <IndexCard tabTone="default" as="div">
+            <div className="space-y-4">
+              <Skeleton className="h-32 w-full" />
+            </div>
+          </IndexCard>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="space-y-6 max-w-6xl">
       <PageHeader

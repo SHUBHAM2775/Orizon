@@ -11,8 +11,7 @@
  */
 
 import { useCallback, useRef, useState } from "react";
-import { useMockAuth } from "@/lib/mock-auth";
-import { getRoleRedirect } from "@/lib/mock-users";
+import { signIn } from "@/app/actions/auth";
 import { AuthInput, AuthButton, AuthError } from "./form-primitives";
 
 export interface SignInFormProps {
@@ -21,8 +20,6 @@ export interface SignInFormProps {
 }
 
 export function SignInForm({ onSuccess }: SignInFormProps) {
-  const { login } = useMockAuth();
-
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -46,18 +43,19 @@ export function SignInForm({ onSuccess }: SignInFormProps) {
       }
 
       setLoading(true);
-      const result = await login(email.trim(), password);
+      const result = await signIn(email.trim(), password);
       setLoading(false);
 
-      if ("error" in result) {
+      if (result.error) {
         setError(result.error);
         return;
       }
 
-      // result.user is available — derive redirect from the role directly
-      onSuccess(getRoleRedirect(result.user.role));
+      if (result.redirectTo) {
+        onSuccess(result.redirectTo);
+      }
     },
-    [email, password, login, onSuccess],
+    [email, password, onSuccess],
   );
 
   // Demo credential hint — visible in non-production environments

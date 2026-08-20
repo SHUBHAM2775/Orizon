@@ -1,51 +1,63 @@
 "use client";
 
-/**
- * role-guard.tsx — Client-side RBAC enforcement.
- *
- * Behaviour:
- *   - Unauthenticated:          redirect to / (the auth screen)
- *   - Wrong role (direct URL):  show an explicit "Unauthorized" card
- *   - Correct role:             render children
- *
- * Built to be replaced with server-side middleware enforcement later (PRD §10)
- * without changing the component API at call sites.
- *
- * Usage:
- *   <RoleGuard allowedRoles={["admin"]}>
- *     <AdminOnlyContent />
- *   </RoleGuard>
- */
-
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useMockAuth } from "@/lib/mock-auth";
+import { createClient } from "@/lib/supabase/client";
 import { IndexCard } from "@/components/ui/index-card";
 import type { UserRole } from "@/lib/mock-users";
+import { DbUserRole } from "@/lib/auth-utils";
 
 interface RoleGuardProps {
-  allowedRoles: UserRole[];
+  allowedRoles: UserRole[]; // keeping old type to not break existing pages
   children: React.ReactNode;
 }
 
 export function RoleGuard({ allowedRoles, children }: RoleGuardProps) {
-  const { currentUser, isAuthenticated } = useMockAuth();
   const router = useRouter();
+  const supabase = createClient();
+  const [currentRole, setCurrentRole] = useState<DbUserRole | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Redirect unauthenticated users to the auth screen at /
   useEffect(() => {
-    if (!isAuthenticated) {
-      router.replace("/");
+    let mounted = true;
+    async function checkRole() {
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (!user) {
+        if (mounted) router.replace("/");
+        return;
+      }
+
+      const { data: userData } = await supabase
+        .from("users")
+        .select("role")
+        .eq("email", user.email)
+        .single();
+
+      if (mounted) {
+        if (userData?.role) {
+          setCurrentRole(userData.role as DbUserRole);
+        } else {
+          router.replace("/");
+        }
+        setLoading(false);
+      }
     }
-  }, [isAuthenticated, router]);
 
-  // While redirect is in-flight, render nothing
-  if (!isAuthenticated || !currentUser) {
-    return null;
-  }
+    checkRole();
+    return () => {
+      mounted = false;
+    };
+  }, [router, supabase]);
 
-  // Authenticated but wrong role — show explicit Unauthorized state (PRD §10)
-  if (!allowedRoles.includes(currentUser.role as UserRole)) {
+  if (loading) return null;
+
+  // Convert old lowercase mock roles to uppercase DB roles for checking
+  const mappedAllowedRoles = allowedRoles.map((role) => 
+    role.toUpperCase().replace("-", "_") as DbUserRole
+  );
+
+  if (!currentRole || !mappedAllowedRoles.includes(currentRole)) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <IndexCard tabTone="reject" as="div" className="max-w-sm w-full">
@@ -53,7 +65,7 @@ export function RoleGuard({ allowedRoles, children }: RoleGuardProps) {
             Unauthorized
           </p>
           <p className="text-sm text-[var(--ink)]">
-            Your role ({currentUser.role}) does not have access to this section.
+            Your role ({currentRole}) does not have access to this section.
           </p>
           <p className="mt-2 text-xs text-[var(--ink-muted)]">
             Contact your Admin if you believe this is incorrect.
@@ -65,3 +77,4 @@ export function RoleGuard({ allowedRoles, children }: RoleGuardProps) {
 
   return <>{children}</>;
 }
+

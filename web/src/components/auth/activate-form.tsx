@@ -16,8 +16,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { useMockAuth } from "@/lib/mock-auth";
-import { MOCK_PENDING_USER } from "@/lib/mock-users";
+import { activateAccount, getActivationEmail } from "@/app/actions/auth";
 import { Stamp } from "@/components/ui/stamp";
 import { AuthInput, AuthButton, AuthError } from "./form-primitives";
 
@@ -31,13 +30,34 @@ export interface ActivateFormProps {
 type FormState = "idle" | "loading" | "success" | "error";
 
 export function ActivateForm({ token, onActivationComplete }: ActivateFormProps) {
-  const { activate } = useMockAuth();
-
   const hasValidToken = !!token;
 
-  // The email is pre-filled from the token payload.
-  // In the mock phase, any token resolves to MOCK_PENDING_USER.email.
-  const activationEmail = hasValidToken ? MOCK_PENDING_USER.email : "";
+  const [activationEmail, setActivationEmail] = useState("");
+  const [emailLoading, setEmailLoading] = useState(hasValidToken);
+  const [emailError, setEmailError] = useState<string | null>(null);
+
+  // Fetch the email associated with the token on mount
+  useEffect(() => {
+    if (!hasValidToken || !token) return;
+    let mounted = true;
+
+    async function fetchEmail() {
+      setEmailLoading(true);
+      const res = await getActivationEmail(token!);
+      if (!mounted) return;
+      if (res.error) {
+        setEmailError(res.error);
+      } else if (res.email) {
+        setActivationEmail(res.email);
+      }
+      setEmailLoading(false);
+    }
+
+    fetchEmail();
+    return () => {
+      mounted = false;
+    };
+  }, [hasValidToken, token]);
 
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -58,6 +78,8 @@ export function ActivateForm({ token, onActivationComplete }: ActivateFormProps)
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
+      if (!hasValidToken || !token) return;
+
       setPasswordError(null);
       setConfirmError(null);
       setFormError(null);
@@ -75,15 +97,16 @@ export function ActivateForm({ token, onActivationComplete }: ActivateFormProps)
       if (hasError) return;
 
       setFormState("loading");
-      try {
-        await activate(activationEmail);
-        setFormState("success");
-      } catch {
+      const res = await activateAccount(token, password);
+      
+      if (res.error) {
         setFormState("error");
-        setFormError("Something went wrong. Please try your activation link again.");
+        setFormError(res.error);
+      } else {
+        setFormState("success");
       }
     },
-    [password, confirmPassword, activationEmail, activate],
+    [password, confirmPassword, hasValidToken, token],
   );
 
   // ── No-token disabled state ──────────────────────────────────────────────
