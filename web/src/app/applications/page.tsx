@@ -4,16 +4,19 @@
  * Analyst dashboard — /applications
  *
  * Features:
- *   - Applicant queue table (5 mock applicants, PRD §7)
- *   - Click a row → view applicant profile + "Run evaluation" button
- *   - After evaluation: decision stamp + rule breakdown + eligible amount (if approved)
- *   - Re-run button to demonstrate scenario 5 (rule reconfiguration)
- *   - Role-gated: analyst only
+ *   - Applicant queue table, fetched live from Supabase `applicants` table.
+ *   - Click a row → view applicant profile. The latest evaluation (if any)
+ *     is pulled from the real `evaluations` + `evaluation_rule_results`
+ *     tables and rendered with the existing breakdown UI.
+ *   - If no evaluation has been run yet, the panel shows that state
+ *     explicitly — no crash, no blank content area.
+ *   - Evaluation creation is intentionally NOT wired in this pass; the
+ *     rule engine migration lives in a dedicated follow-up.
+ *   - Role-gated: analyst only.
  */
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { useStore } from "@/lib/mock-store";
 import { RoleGuard } from "@/components/dashboard/role-guard";
 import { DashboardShell } from "@/components/dashboard/shell";
 import { IndexCard, IndexCardHeader } from "@/components/ui/index-card";
@@ -46,6 +49,73 @@ function fmtINR(n: number) {
   return "₹" + n.toLocaleString("en-IN");
 }
 
+/** Real applicant row from Supabase `applicants`. */
+type ApplicantRow = {
+  id: string;
+  applicant_ref: string;
+  age: number | null;
+  employment_type: string | null;
+  requested_amount: number | null;
+  tenure_months: number | null;
+  monthly_income: number | null;
+  cibil_score: number | null;
+  existing_emi: number | null;
+  avg_bank_balance: number | null;
+  bounce_count: number | null;
+  last_default: boolean | null;
+  income_trend: string | null;
+  assets_value: number | null;
+  raw_input_json: Record<string, any> | null;
+  submitted_by: string | null;
+  created_at: string;
+};
+
+/** Real evaluation row from Supabase `evaluations`. */
+type EvaluationRow = {
+  id: string;
+  applicant_id: string;
+  final_decision: DecisionOutcome;
+  eligible_amount: number | null;
+  interest_rate: number | null;
+  risk_grade: string | null;
+  derived_metrics_json: Record<string, any> | null;
+  rule_version_snapshot: Record<string, any> | null;
+  evaluated_at: string;
+};
+
+/**
+ * Map a real Supabase `applicants` row into the legacy `Applicant` shape
+ * the existing UI components expect (eval-detail uses name/email/foir/etc.).
+ * Missing fields are derived from `raw_input_json` where the upload pipeline
+ * stored the original parsed payload, and fall back to safe defaults.
+ */
+function applicantRowToApplicant(row: ApplicantRow): Applicant {
+  const raw = row.raw_input_json ?? {};
+  const monthlyIncome =
+    row.monthly_income ??
+    (Number(raw.monthly_income ?? raw.annual_income ?? 0) || 0);
+  // FOIR = (existing_emi / monthly_income) * 100, if both known
+  let foir = 0;
+  if (monthlyIncome > 0 && row.existing_emi != null) {
+    foir = Math.round((row.existing_emi / monthlyIncome) * 100);
+  }
+  return {
+    id: row.applicant_ref ?? row.id,
+    name: (raw.name as string) ?? row.applicant_ref ?? row.id.slice(0, 8),
+    email: (raw.email as string) ?? "",
+    loanAmount: Number(row.requested_amount ?? raw.requested_amount ?? 0),
+    tenureMonths: Number(row.tenure_months ?? raw.tenure_months ?? 0),
+    cibilScore: Number(row.cibil_score ?? raw.cibil_score ?? 0),
+    foir: Number(raw.foir ?? foir),
+    avgMonthlyBalance: Number(row.avg_bank_balance ?? raw.avg_bank_balance ?? 0),
+    bounceCount: Number(row.bounce_count ?? raw.bounce_count ?? 0),
+    annualIncome: monthlyIncome * 12,
+    hasWriteOff: Boolean(row.last_default ?? raw.hasWriteOff ?? raw.has_write_off ?? false),
+    submittedAt: row.created_at,
+    submittedBy: row.submitted_by ?? "",
+  };
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 export default function ApplicationsDashboard() {
@@ -59,9 +129,15 @@ export default function ApplicationsDashboard() {
 }
 
 function AnalystContent() {
-  const { applicants, runEvaluation, latestEvaluation } = useStore();
   const [currentUser, setCurrentUser] = useState<{ email: string; role: string; name?: string } | null>(null);
   const supabase = createClient();
+
+  // Real Supabase state
+  const [applicantRows, setApplicantRows] = useState<ApplicantRow[] | null>(null);
+  const [applicantsError, setApplicantsError] = useState<string | null>(null);
+  const [evaluationRows, setEvaluationRows] = useState<EvaluationRow[] | null>(null);
+  const [evaluationsError, setEvaluationsError] = useState<string | null>(null);
+  const [refetchKey, setRefetchKey] = useState(0);
 
   useEffect(() => {
     async function loadUser() {
@@ -73,7 +149,7 @@ function AnalystContent() {
         .select("name, role")
         .eq("email", user.email)
         .single();
-      
+
       if (userData) {
         const mappedRole = userData.role.toLowerCase().replace("_", "-");
         setCurrentUser({ email: user.email, role: mappedRole, name: userData.name });
@@ -82,22 +158,94 @@ function AnalystContent() {
     loadUser();
   }, [supabase]);
 
+  // Fetch applicants (RLS: authenticated has SELECT on this table).
+  // Re-fetches when `refetchKey` bumps so newly uploaded applicants appear.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadApplicants() {
+      const { data, error } = await supabase
+        .from("applicants")
+        .select(
+          "id, applicant_ref, age, employment_type, requested_amount, tenure_months, monthly_income, cibil_score, existing_emi, avg_bank_balance, bounce_count, last_default, income_trend, assets_value, raw_input_json, submitted_by, created_at",
+        )
+        .order("created_at", { ascending: false });
+      if (cancelled) return;
+      if (error) {
+        setApplicantsError(error.message);
+        setApplicantRows([]);
+      } else {
+        setApplicantsError(null);
+        setApplicantRows(data ?? []);
+      }
+    }
+    loadApplicants();
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, refetchKey]);
 
+  // Fetch all evaluations once. We filter by selected applicant client-side.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadEvaluations() {
+      const { data, error } = await supabase
+        .from("evaluations")
+        .select(
+          "id, applicant_id, final_decision, eligible_amount, interest_rate, risk_grade, derived_metrics_json, rule_version_snapshot, evaluated_at",
+        )
+        .order("evaluated_at", { ascending: false });
+      if (cancelled) return;
+      if (error) {
+        setEvaluationsError(error.message);
+        setEvaluationRows([]);
+      } else {
+        setEvaluationsError(null);
+        setEvaluationRows(data ?? []);
+      }
+    }
+    loadEvaluations();
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, refetchKey]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [isRunning, setIsRunning] = useState(false);
+
+  // Map DB rows → legacy Applicant shape for the UI.
+  const applicants = useMemo<Applicant[]>(
+    () => (applicantRows ?? []).map(applicantRowToApplicant),
+    [applicantRows],
+  );
 
   const selectedApplicant = applicants.find((a) => a.id === selectedId) ?? null;
-  const latestEval = selectedId ? latestEvaluation(selectedId) : undefined;
 
-  const handleRunEval = useCallback(async () => {
-    if (!selectedId || !currentUser) return;
-    setIsRunning(true);
-    // Small artificial delay to give feedback
-    await new Promise((r) => setTimeout(r, 600));
-    runEvaluation(selectedId, currentUser.email);
-    setIsRunning(false);
-  }, [selectedId, currentUser, runEvaluation]);
+  // Real evaluation lookup: find the latest evaluation for the selected
+  // applicant's underlying UUID. We need the ApplicantRow (UUID id) since
+  // evaluations.applicant_id references the UUID, not applicant_ref.
+  const selectedRow = applicantRows?.find((r) => (r.applicant_ref ?? r.id) === selectedId) ?? null;
+  const latestRealEval: EvaluationRow | null = useMemo(() => {
+    if (!selectedRow || !evaluationRows) return null;
+    const matches = evaluationRows.filter((e) => e.applicant_id === selectedRow.id);
+    return matches.length > 0 ? matches[0] : null; // already sorted desc
+  }, [selectedRow, evaluationRows]);
+
+  // Per-row decision badge for the queue: derive from real evaluations
+  // table so the analyst sees real status even before opening the detail.
+  const decisionByApplicantRef = useMemo(() => {
+    const map = new Map<string, DecisionOutcome>();
+    if (!applicantRows || !evaluationRows) return map;
+    // For each evaluation, mark its applicant's ref by the latest decision.
+    const seen = new Set<string>();
+    for (const ev of evaluationRows) {
+      const row = applicantRows.find((r) => r.id === ev.applicant_id);
+      if (!row) continue;
+      const ref = row.applicant_ref ?? row.id;
+      if (seen.has(ref)) continue;
+      seen.add(ref);
+      map.set(ref, ev.final_decision);
+    }
+    return map;
+  }, [applicantRows, evaluationRows]);
 
   if (!currentUser) {
     return (
@@ -140,21 +288,24 @@ function AnalystContent() {
       </div>
     );
   }
+
+  const loadingQueue = applicantRows === null;
+
   return (
     <div className="space-y-6 max-w-6xl">
       <PageHeader
         title="Applications"
-        meta="Analyst queue · mock data phase"
+        meta="Analyst queue · live Supabase data"
       />
 
-      <FileUploadSection />
+      <FileUploadSection onUploaded={() => setRefetchKey((k) => k + 1)} />
 
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_420px] gap-6 items-start">
         {/* ── Left: applicant queue ─────────────────────────────────── */}
         <IndexCard tabTone="default" as="div">
           <IndexCardHeader
             title="Applicant Queue"
-            meta={`${applicants.length} applications`}
+            meta={`${applicants.length} application${applicants.length === 1 ? "" : "s"}`}
           />
           <div className="-mx-6 -mb-6 mt-4 border-t border-[color-mix(in_oklch,var(--ink),transparent_85%)] overflow-x-auto">
             {/* Table head */}
@@ -163,35 +314,67 @@ function AnalystContent() {
                 <span key={h} className="font-mono text-[10px] uppercase tracking-wider text-[var(--ink-muted)]">{h}</span>
               ))}
             </div>
-            {/* Rows */}
-            {applicants.map((a) => {
-              const ev = latestEvaluation(a.id);
-              const isSelected = selectedId === a.id;
-              return (
-                <button
-                  key={a.id}
-                  onClick={() => setSelectedId(a.id)}
-                  className={cn(
-                    "w-full grid grid-cols-[auto_1fr_auto_auto_auto] gap-x-4 items-center px-6 py-3 text-left",
-                    "border-b border-[color-mix(in_oklch,var(--ink),transparent_92%)] last:border-0",
-                    "transition-colors duration-100",
-                    isSelected
-                      ? "bg-[color-mix(in_oklch,var(--brass),transparent_90%)]"
-                      : "hover:bg-[color-mix(in_oklch,var(--paper),var(--ink)_2%)]",
-                  )}
-                  aria-selected={isSelected}
-                  role="row"
-                >
-                  <span className="font-mono text-xs text-[var(--ink-muted)]">{a.id}</span>
-                  <span className="text-sm text-[var(--ink)] font-medium truncate">{a.name}</span>
-                  <span className="font-mono text-xs text-[var(--ink)] tabular-nums">{fmtINR(a.loanAmount)}</span>
-                  <span className="font-mono text-xs text-[var(--ink)] tabular-nums">{a.cibilScore}</span>
-                  <div className="flex justify-end">
-                    <StatusBadge tone={decisionToBadgeTone(ev?.finalDecision as DecisionOutcome | undefined)} />
+
+            {/* Error state */}
+            {applicantsError && (
+              <p className="px-6 py-4 text-sm text-[var(--reject)]">
+                Failed to load applicants: {applicantsError}
+              </p>
+            )}
+
+            {/* Loading state */}
+            {!applicantsError && loadingQueue && (
+              <>
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="w-full grid grid-cols-[auto_1fr_auto_auto_auto] gap-x-4 items-center px-6 py-4 border-b border-[color-mix(in_oklch,var(--ink),transparent_92%)]">
+                    <Skeleton className="h-4 w-12" />
+                    <Skeleton className="h-4 w-32" />
+                    <Skeleton className="h-4 w-20" />
+                    <Skeleton className="h-4 w-12" />
+                    <Skeleton className="h-6 w-20" />
                   </div>
-                </button>
-              );
-            })}
+                ))}
+              </>
+            )}
+
+            {/* Empty state */}
+            {!applicantsError && !loadingQueue && applicants.length === 0 && (
+              <p className="px-6 py-6 text-sm text-[var(--ink-muted)]">
+                No applicants yet. Upload a CSV/JSON/PDF above to add one.
+              </p>
+            )}
+
+            {/* Rows */}
+            {!applicantsError &&
+              !loadingQueue &&
+              applicants.map((a) => {
+                const decision = decisionByApplicantRef.get(a.id);
+                const isSelected = selectedId === a.id;
+                return (
+                  <button
+                    key={a.id}
+                    onClick={() => setSelectedId(a.id)}
+                    className={cn(
+                      "w-full grid grid-cols-[auto_1fr_auto_auto_auto] gap-x-4 items-center px-6 py-3 text-left",
+                      "border-b border-[color-mix(in_oklch,var(--ink),transparent_92%)] last:border-0",
+                      "transition-colors duration-100",
+                      isSelected
+                        ? "bg-[color-mix(in_oklch,var(--brass),transparent_90%)]"
+                        : "hover:bg-[color-mix(in_oklch,var(--paper),var(--ink)_2%)]",
+                    )}
+                    aria-selected={isSelected}
+                    role="row"
+                  >
+                    <span className="font-mono text-xs text-[var(--ink-muted)]">{a.id}</span>
+                    <span className="text-sm text-[var(--ink)] font-medium truncate">{a.name}</span>
+                    <span className="font-mono text-xs text-[var(--ink)] tabular-nums">{fmtINR(a.loanAmount)}</span>
+                    <span className="font-mono text-xs text-[var(--ink)] tabular-nums">{a.cibilScore}</span>
+                    <div className="flex justify-end">
+                      <StatusBadge tone={decisionToBadgeTone(decision)} />
+                    </div>
+                  </button>
+                );
+              })}
           </div>
         </IndexCard>
 
@@ -200,43 +383,172 @@ function AnalystContent() {
           <div className="space-y-4">
             <ApplicantProfileCard applicant={selectedApplicant} />
 
-            {/* Run / Re-run button */}
-            <button
-              onClick={handleRunEval}
-              disabled={isRunning}
-              className={cn(
-                "w-full bg-[var(--brass)] text-[var(--paper)]",
-                "border border-[var(--brass)] rounded-[var(--radius-sm)]",
-                "px-4 py-2.5 text-sm font-medium tracking-wide",
-                "hover:bg-[color-mix(in_oklch,var(--brass),var(--ink)_18%)]",
-                "transition-colors duration-150",
-                "disabled:opacity-50 disabled:cursor-not-allowed",
-              )}
-            >
-              {isRunning ? "Evaluating…" : latestEval ? "Re-run Evaluation" : "Run Evaluation"}
-            </button>
-
-            {latestEval && (
-              <p className="font-mono text-[10px] uppercase tracking-wider text-[var(--ink-muted)] text-center">
-                Re-run applies current rule thresholds — useful for demo scenario 5.
-              </p>
+            {/* Evaluation section: real if available, else explicit empty state */}
+            {latestRealEval ? (
+              <RealEvaluationPanel
+                evaluationRow={latestRealEval}
+                applicant={selectedApplicant}
+                applicantRow={selectedRow!}
+                supabase={supabase}
+                evaluationError={evaluationsError}
+              />
+            ) : (
+              <IndexCard tabTone="default" as="div">
+                <IndexCardHeader title="Evaluation" meta="No run yet" />
+                <p className="text-xs text-[var(--ink-muted)] mt-2 leading-relaxed">
+                  No evaluation has been recorded for this applicant yet.
+                  Evaluation creation is being migrated to the live rule
+                  engine in a follow-up pass — the existing mock re-run
+                  button is intentionally disabled until then.
+                </p>
+                <button
+                  disabled
+                  className={cn(
+                    "w-full mt-3 bg-[color-mix(in_oklch,var(--brass),transparent_60%)] text-[var(--paper)]",
+                    "border border-[color-mix(in_oklch,var(--brass),transparent_60%)] rounded-[var(--radius-sm)]",
+                    "px-4 py-2.5 text-sm font-medium tracking-wide",
+                    "cursor-not-allowed",
+                  )}
+                >
+                  Run Evaluation
+                </button>
+              </IndexCard>
             )}
           </div>
         ) : (
           <IndexCard tabTone="default" as="div">
             <p className="text-xs text-[var(--ink-muted)] leading-relaxed">
-              Select an applicant from the queue to view their profile and run an evaluation.
+              Select an applicant from the queue to view their profile.
             </p>
           </IndexCard>
         )}
       </div>
+    </div>
+  );
+}
 
-      {/* ── Evaluation result (appears after running) ─────────────── */}
-      {latestEval && selectedApplicant && (
-        <div className="space-y-4">
-          <EvalSummaryCard evaluation={latestEval} applicant={selectedApplicant} />
-          <RuleBreakdownTable results={latestEval.ruleResults} />
-        </div>
+/**
+ * Renders an existing real evaluation pulled from Supabase, plus the
+ * rule-by-rule breakdown (read from evaluation_rule_results, joined with
+ * rules to fetch names/explanations).
+ */
+function RealEvaluationPanel({
+  evaluationRow,
+  applicant,
+  applicantRow,
+  supabase,
+  evaluationError,
+}: {
+  evaluationRow: EvaluationRow;
+  applicant: Applicant;
+  applicantRow: ApplicantRow;
+  supabase: ReturnType<typeof createClient>;
+  evaluationError: string | null;
+}) {
+  const [ruleResults, setRuleResults] = useState<Array<{
+    ruleId: string;
+    ruleName: string;
+    reasonCode: string;
+    actualValue: number | boolean;
+    thresholdAtEvaluation: number;
+    operator: "gte" | "lte" | "gt" | "lt" | "eq" | "neq";
+    triggered: boolean;
+    outcome: "HARD_REJECT" | "EXCEPTION_L1" | "EXCEPTION_L2" | "APPROVE_FACTOR";
+    explanation: string;
+  }> | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setLoadError(null);
+      const { data, error } = await supabase
+        .from("evaluation_rule_results")
+        .select(
+          "id, evaluation_id, rule_id, result, actual_value, threshold_at_evaluation, rules:rule_id ( rule_code, description, field_name, operator, outcome, reason_code )",
+        )
+        .eq("evaluation_id", evaluationRow.id);
+      if (cancelled) return;
+      if (error) {
+        setLoadError(error.message);
+        setRuleResults([]);
+      } else {
+        // The PostgREST embed returns either an object or an array depending
+        // on the relation shape; rules is a single FK, so treat it as object.
+        const mapped = (data ?? []).map((r: any) => {
+          const rule = Array.isArray(r.rules) ? r.rules[0] : r.rules;
+          const outcome = (rule?.outcome ?? "PASS") as
+            | "HARD_REJECT"
+            | "EXCEPTION_L1"
+            | "EXCEPTION_L2"
+            | "PASS";
+          const mappedOutcome: "HARD_REJECT" | "EXCEPTION_L1" | "EXCEPTION_L2" | "APPROVE_FACTOR" =
+            outcome === "PASS" ? "APPROVE_FACTOR" : outcome;
+          const operator = (rule?.operator ?? "gte").toLowerCase() as
+            | "gte" | "lte" | "gt" | "lt" | "eq" | "neq";
+          return {
+            ruleId: r.rule_id,
+            ruleName: rule?.description ?? rule?.rule_code ?? "Rule",
+            reasonCode: rule?.reason_code ?? rule?.rule_code ?? "",
+            actualValue: r.actual_value ?? 0,
+            thresholdAtEvaluation: r.threshold_at_evaluation,
+            operator,
+            triggered: r.result === "TRIGGERED",
+            outcome: mappedOutcome,
+            explanation: rule?.description ?? "",
+          };
+        });
+        setRuleResults(mapped);
+      }
+      setLoading(false);
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [evaluationRow.id, supabase]);
+
+  // Adapt the real evaluation into the legacy Evaluation shape so the
+  // existing EvalSummaryCard + RuleBreakdownTable keep working.
+  const legacyEvaluation = {
+    id: evaluationRow.id,
+    applicantId: applicantRow.applicant_ref ?? applicantRow.id,
+    runAt: evaluationRow.evaluated_at,
+    runBy: "—",
+    finalDecision: evaluationRow.final_decision,
+    eligibleAmount: evaluationRow.eligible_amount ?? undefined,
+    interestRateBand: evaluationRow.interest_rate ? `${evaluationRow.interest_rate}%` : undefined,
+    rulesVersion:
+      (evaluationRow.rule_version_snapshot as any)?.version ??
+      (evaluationRow.rule_version_snapshot as any)?.rules_version ??
+      1,
+    ruleResults: ruleResults ?? [],
+  };
+
+  return (
+    <div className="space-y-4">
+      {evaluationError && (
+        <p className="text-xs text-[var(--reject)]">
+          Failed to load evaluations: {evaluationError}
+        </p>
+      )}
+      <EvalSummaryCard evaluation={legacyEvaluation} applicant={applicant} />
+      {loading ? (
+        <IndexCard tabTone="default" as="div">
+          <Skeleton className="h-5 w-32 mb-2" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-3/4 mt-2" />
+        </IndexCard>
+      ) : loadError ? (
+        <IndexCard tabTone="default" as="div">
+          <p className="text-xs text-[var(--reject)]">
+            Failed to load rule breakdown: {loadError}
+          </p>
+        </IndexCard>
+      ) : (
+        ruleResults && <RuleBreakdownTable results={ruleResults} />
       )}
     </div>
   );

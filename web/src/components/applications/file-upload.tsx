@@ -7,7 +7,7 @@ import { parseCSV, parseJSON, validateApplicantData, type UploadData } from "@/l
 import { submitApplicantAction, extractPdfTextAction } from "@/app/actions/upload";
 import { PdfReviewForm } from "./pdf-review-form";
 
-export function FileUploadSection() {
+export function FileUploadSection({ onUploaded }: { onUploaded?: () => void } = {}) {
   const [mode, setMode] = useState<"data" | "pdf">("data");
   
   const [file, setFile] = useState<File | null>(null);
@@ -106,6 +106,7 @@ export function FileUploadSection() {
       } else {
         setSuccessMsg(`Successfully imported applicant: ${submitResult.applicant.applicant_ref}`);
         setFile(null);
+        onUploaded?.();
       }
     } catch (err: any) {
       setErrors([err.message || "An error occurred during processing"]);
