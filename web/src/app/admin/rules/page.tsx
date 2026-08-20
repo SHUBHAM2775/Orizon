@@ -16,13 +16,27 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { useStore } from "@/lib/mock-store";
 import { DashboardShell } from "@/components/dashboard/shell";
 import { RoleGuard } from "@/components/dashboard/role-guard";
 import { IndexCard, IndexCardHeader } from "@/components/ui/index-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import type { Rule } from "@/lib/mock-data";
+
+export interface DBRule {
+  id: string;
+  rule_code: string;
+  description: string;
+  field_name: string;
+  operator: string;
+  threshold_value: number;
+  outcome: string;
+  reason_code: string;
+  is_active: boolean;
+  version: number;
+  category: string;
+  deviation_weight: number | null;
+  priority: number;
+}
 
 export default function RuleConfigPage() {
   return (
@@ -57,7 +71,27 @@ function RuleConfigContent() {
     loadUser();
   }, [supabase]);
 
-  const { rules, updateRule } = useStore();
+  const [rules, setRules] = useState<DBRule[]>([]);
+  const [loadingRules, setLoadingRules] = useState(true);
+
+  const loadRules = useCallback(async () => {
+    setLoadingRules(true);
+    const { data, error } = await supabase
+      .from("rules")
+      .select("*")
+      .order("priority", { ascending: true });
+    
+    if (data) {
+      setRules(data as DBRule[]);
+    } else {
+      console.error("Failed to load rules:", error);
+    }
+    setLoadingRules(false);
+  }, [supabase]);
+
+  useEffect(() => {
+    loadRules();
+  }, [loadRules]);
 
 
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -65,25 +99,35 @@ function RuleConfigContent() {
   const [draftActive, setDraftActive] = useState<boolean>(true);
   const [savedId, setSavedId] = useState<string | null>(null);
 
-  const startEdit = useCallback((rule: Rule) => {
+  const startEdit = useCallback((rule: DBRule) => {
     setEditingId(rule.id);
-    setDraftThreshold(String(rule.threshold));
-    setDraftActive(rule.isActive);
+    setDraftThreshold(String(rule.threshold_value));
+    setDraftActive(rule.is_active);
     setSavedId(null);
   }, []);
 
-  const handleSave = useCallback((rule: Rule) => {
+  const handleSave = useCallback(async (rule: DBRule) => {
     if (!currentUser) return;
     const parsed = parseFloat(draftThreshold);
     if (isNaN(parsed)) return;
-    updateRule(
-      { ...rule, threshold: parsed, isActive: draftActive },
-      currentUser.email,
-      currentUser.role,
-    );
-    setSavedId(rule.id);
-    setEditingId(null);
-  }, [draftThreshold, draftActive, currentUser, updateRule]);
+    
+    const { error } = await supabase
+      .from("rules")
+      .update({
+        threshold_value: parsed,
+        is_active: draftActive,
+        version: rule.version + 1,
+      })
+      .eq("id", rule.id);
+
+    if (!error) {
+      setSavedId(rule.id);
+      setEditingId(null);
+      loadRules(); // Refresh data to show new version
+    } else {
+      console.error("Error updating rule:", error);
+    }
+  }, [draftThreshold, draftActive, currentUser, supabase, loadRules]);
 
   if (!currentUser) {
     return (
@@ -147,7 +191,7 @@ function RuleConfigContent() {
       <IndexCard tabTone="default" as="div">
         <IndexCardHeader
           title="Active Rules"
-          meta={`${rules.length} rules · engine version ${Math.max(...rules.map((r) => r.version))}`}
+          meta={`${rules.length} rules · engine version ${rules.length > 0 ? Math.max(...rules.map((r) => r.version)) : 1}`}
         />
         <div className="-mx-6 -mb-6 mt-4 border-t border-[color-mix(in_oklch,var(--ink),transparent_85%)]">
           {/* Header */}
@@ -166,19 +210,19 @@ function RuleConfigContent() {
                 {/* Rule row */}
                 <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 items-center px-6 py-3">
                   <div>
-                    <p className="text-xs font-medium text-[var(--ink)]">{rule.name}</p>
+                    <p className="text-xs font-medium text-[var(--ink)]">{rule.rule_code}</p>
                     <p className="font-mono text-[10px] text-[var(--ink-muted)]">
-                      {rule.reasonCode} · v{rule.version}
-                      {!rule.isActive && " · INACTIVE"}
+                      {rule.reason_code} · v{rule.version}
+                      {!rule.is_active && " · INACTIVE"}
                     </p>
                   </div>
                   <span className="font-mono text-xs text-[var(--ink-muted)] whitespace-nowrap">
-                    {rule.field} {rule.operator}
+                    {rule.field_name} {rule.operator}
                   </span>
                   <span className="font-mono text-xs text-[var(--ink)] tabular-nums whitespace-nowrap">
                     {wasSaved ? (
-                      <span className="text-[var(--approve)]">✓ {rule.threshold}</span>
-                    ) : rule.threshold}
+                      <span className="text-[var(--approve)]">✓ {rule.threshold_value}</span>
+                    ) : rule.threshold_value}
                   </span>
                   <span className={cn(
                     "font-mono text-[10px] uppercase tracking-wider whitespace-nowrap",
@@ -198,7 +242,7 @@ function RuleConfigContent() {
                 {isEditing && (
                   <div className="px-6 pb-4 bg-[color-mix(in_oklch,var(--paper),var(--ink)_2%)] border-t border-[color-mix(in_oklch,var(--ink),transparent_90%)]">
                     <p className="font-mono text-[10px] uppercase tracking-wider text-[var(--ink-muted)] pt-3 mb-3">
-                      Editing: {rule.name}
+                      Editing: {rule.rule_code}
                     </p>
                     <p className="text-xs text-[var(--ink-muted)] mb-3 leading-relaxed">
                       {rule.description}
