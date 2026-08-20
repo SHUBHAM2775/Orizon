@@ -21,7 +21,6 @@ from io import BytesIO
 
 from ingestion.mapper import map_structured_input
 from engine.engine import run_bre
-from engine.xai import generate_xai_explanation
 from core.models import NormalizedApplicantProfile, StructuredRow
 
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
@@ -114,8 +113,7 @@ def process_structured_folder(folder_path: str):
   # Run decision engine
   decision_report = run_bre(final_profile)
   
-  # Generate XAI Explanation
-  decision_report = generate_xai_explanation(final_profile, decision_report)
+  # XAI explanation is now generated inside run_bre() → orchestrator
 
   # Save & print results
   timestamp = int(time.time())
@@ -177,8 +175,7 @@ def process_pdf_folder(folder_path: str):
   # Run decision engine
   decision_report = run_bre(final_profile)
 
-  # Generate XAI Explanation
-  decision_report = generate_xai_explanation(final_profile, decision_report)
+  # XAI explanation is now generated inside run_bre() → orchestrator
 
   # Save & print results
   timestamp = int(time.time())
@@ -229,7 +226,8 @@ def _print_results(profile, decision, filepath):
   # Show XAI Explanations
   if decision.xaiMemo:
     print("\n  ================ EXPLAINABILITY MEMO ================")
-    print(f"  {decision.xaiMemo}")
+    memo_safe = decision.xaiMemo.encode("ascii", errors="replace").decode("ascii")
+    print(f"  {memo_safe}")
     if decision.actionableSteps:
       print("\n  Actionable Steps:")
       for step in decision.actionableSteps:

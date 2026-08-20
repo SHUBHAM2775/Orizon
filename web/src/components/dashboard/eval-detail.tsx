@@ -149,6 +149,20 @@ export function EvalSummaryCard({ evaluation, applicant }: { evaluation: Evaluat
           )}
           <DetailRow label="Rules evaluated" value={String(evaluation.ruleResults.length)} />
           <DetailRow label="Rules triggered" value={String(triggeredRules.length)} />
+          
+          {evaluation.derivedMetrics?.api_budget_summary && (
+            <DetailRow 
+              label="API Budget (Calls)" 
+              value={evaluation.derivedMetrics.api_budget_summary.total ?? "—"} 
+            />
+          )}
+          {evaluation.derivedMetrics?.policy_result?.combined_tool_adjustment != null && (
+            <DetailRow 
+              label="Agent Adjustment" 
+              value={`${evaluation.derivedMetrics.policy_result.combined_tool_adjustment > 0 ? '+' : ''}${evaluation.derivedMetrics.policy_result.combined_tool_adjustment}`} 
+            />
+          )}
+
           <DetailRow label="Rules version" value={`v${evaluation.rulesVersion}`} />
           <DetailRow label="Run by" value={evaluation.runBy} />
         </div>
@@ -219,6 +233,75 @@ export function RuleBreakdownTable({ results }: { results: EvaluationRuleResult[
               {r.triggered ? "TRIGGERED" : "PASS"}
             </span>
           </div>
+        ))}
+      </div>
+    </IndexCard>
+  );
+}
+
+// ─── ToolResultsCard ──────────────────────────────────────────────────────────
+
+export function ToolResultsCard({ toolResults }: { toolResults: any[] }) {
+  if (!toolResults || toolResults.length === 0) return null;
+  
+  return (
+    <IndexCard tabTone="default" as="div">
+      <IndexCardHeader
+        title="Agentic Workflow (Tools Run)"
+        meta={`${toolResults.filter(t => t.ran).length} tools executed`}
+      />
+      <div className="-mx-6 -mb-6 mt-4 border-t border-[color-mix(in_oklch,var(--ink),transparent_85%)]">
+        <div className="flex flex-col">
+          {toolResults.map((t, idx) => (
+            <div key={idx} className="px-6 py-4 border-b border-[color-mix(in_oklch,var(--ink),transparent_92%)] last:border-0">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-medium text-sm text-[var(--ink)]">
+                  {t.tool_id.replace(/_/g, " ").toUpperCase()}
+                </span>
+                <span className={cn(
+                  "font-mono text-[10px] uppercase tracking-wider",
+                  t.ran ? "text-[var(--approve)]" : "text-[var(--ink-muted)]"
+                )}>
+                  {t.ran ? "Executed" : "Skipped"}
+                </span>
+              </div>
+              {t.ran && (
+                <div className="space-y-1.5 mt-2">
+                  <DetailRow label="Confidence" value={t.confidence.toUpperCase()} />
+                  <DetailRow label="Adjustment" value={`${t.adjustment_applied > 0 ? '+' : ''}${t.adjustment_applied}`} />
+                  {t.key_reasons && t.key_reasons.length > 0 && (
+                    <div className="mt-2 text-xs text-[var(--ink-muted)]">
+                      <ul className="list-disc pl-4 space-y-1">
+                        {t.key_reasons.map((reason: string, rIdx: number) => (
+                          <li key={rIdx}>{reason}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </IndexCard>
+  );
+}
+
+// ─── XAINarrativeCard ─────────────────────────────────────────────────────────
+
+export function XAINarrativeCard({ narrative }: { narrative: string }) {
+  if (!narrative) return null;
+  
+  return (
+    <IndexCard tabTone="default" as="div">
+      <IndexCardHeader
+        title="Agentic Reasoning (XAI)"
+        meta="LLM-generated explanation"
+      />
+      <div className="mt-4 text-sm leading-relaxed text-[var(--ink)]">
+        {narrative.split('\n').map((paragraph, idx) => (
+          <p key={idx} className="mb-2 last:mb-0">{paragraph}</p>
         ))}
       </div>
     </IndexCard>

@@ -28,6 +28,8 @@ import {
   ApplicantProfileCard,
   EvalSummaryCard,
   RuleBreakdownTable,
+  XAINarrativeCard,
+  ToolResultsCard,
 } from "@/components/dashboard/eval-detail";
 import { cn } from "@/lib/utils";
 import { FileUploadSection } from "@/components/applications/file-upload";
@@ -81,6 +83,11 @@ type EvaluationRow = {
   interest_rate: number | null;
   risk_grade: string | null;
   derived_metrics_json: Record<string, any> | null;
+  xai_narrative: string | null;
+  tool_results_json: Record<string, any> | null;
+  api_budget_json: Record<string, any> | null;
+  ml_risk_tier: string | null;
+  ml_risk_score: number | null;
   rule_version_snapshot: Record<string, any> | null;
   evaluated_at: string;
 };
@@ -327,6 +334,16 @@ function AnalystContent() {
     interestRateBand: latestRealEval.interest_rate ? `${latestRealEval.interest_rate}%` : undefined,
     rulesVersion: (latestRealEval.rule_version_snapshot as any)?.version ?? 1,
     ruleResults: ruleResults ?? [],
+    derivedMetrics: {
+      ...latestRealEval.derived_metrics_json,
+      xai_narrative: latestRealEval.xai_narrative ?? latestRealEval.derived_metrics_json?.xai_narrative,
+      tool_results: latestRealEval.tool_results_json ?? latestRealEval.derived_metrics_json?.tool_results,
+      api_budget_summary: latestRealEval.api_budget_json ?? latestRealEval.derived_metrics_json?.api_budget_summary,
+      ml_result: {
+        risk_tier: latestRealEval.ml_risk_tier ?? latestRealEval.derived_metrics_json?.ml_result?.risk_tier,
+        risk_score: latestRealEval.ml_risk_score ?? latestRealEval.derived_metrics_json?.ml_result?.risk_score,
+      }
+    },
   } : null;
 
   if (!currentUser) {
@@ -503,6 +520,12 @@ function AnalystContent() {
                   </p>
                 )}
                 <EvalSummaryCard evaluation={legacyEvaluation} applicant={selectedApplicant} />
+                {legacyEvaluation.derivedMetrics?.tool_results && (
+                  <ToolResultsCard toolResults={legacyEvaluation.derivedMetrics.tool_results} />
+                )}
+                {legacyEvaluation.derivedMetrics?.xai_narrative && (
+                  <XAINarrativeCard narrative={legacyEvaluation.derivedMetrics.xai_narrative} />
+                )}
               </div>
             ) : (
               <IndexCard tabTone="default" as="div">

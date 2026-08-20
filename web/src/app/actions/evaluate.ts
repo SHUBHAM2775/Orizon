@@ -4,28 +4,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { revalidatePath } from "next/cache";
 
-type DecisionOutcome = "APPROVED" | "HARD_REJECT" | "EXCEPTION_L1" | "EXCEPTION_L2";
-
-function evaluateCondition(operator: string, observed: any, threshold: any): boolean {
-  if (observed == null) return false;
-  if (typeof observed === "boolean" && typeof threshold === "number") {
-    // Sometimes boolean flags are compared to 1/0
-    observed = observed ? 1 : 0;
-  }
-  
-  switch (operator) {
-    case "EQ": return observed === threshold;
-    case "LT": return observed < threshold;
-    case "GT": return observed > threshold;
-    case "LTE": return observed <= threshold;
-    case "GTE": return observed >= threshold;
-    default: return false;
-  }
-}
-
 export async function runEvaluationAction(applicantId: string, applicantRef: string) {
   const supabase = await createClient();
-  const adminClient = createAdminClient();
   
   // 1. Fetch applicant
   const { data: applicant, error: applicantError } = await supabase
@@ -38,127 +18,35 @@ export async function runEvaluationAction(applicantId: string, applicantRef: str
     throw new Error("Applicant not found");
   }
 
-  // 2. Fetch active rules
-  const { data: rules, error: rulesError } = await supabase
-    .from("rules")
-    .select("*")
-    .eq("is_active", true)
-    .order("priority", { ascending: true });
-
-  if (rulesError || !rules) {
-    throw new Error("Failed to fetch rules");
-  }
-
-  // 3. Map applicant to engine fields
+  // 2. Prepare profile data for python API
   const raw = applicant.raw_input_json || {};
-  const monthlyIncome = applicant.monthly_income ?? Number(raw.monthly_income ?? raw.annual_income ?? 0) ?? 0;
-  const annualIncome = monthlyIncome * 12;
+  const profile = {
+    ...raw,
+    applicantId: applicantRef,
+    age: applicant.age ?? raw.age,
+    employmentType: applicant.employment_type ?? raw.employmentType,
+    requestedLoanAmount: applicant.requested_amount ?? raw.requested_amount,
+    tenureMonths: applicant.tenure_months ?? raw.tenure_months,
+    declaredIncome: applicant.monthly_income ?? raw.monthly_income ?? raw.annual_income,
+    bureauScore: applicant.cibil_score ?? raw.cibil_score,
+    hasWriteOff: applicant.last_default ?? raw.hasWriteOff ?? raw.has_write_off,
+  };
+
+  const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://localhost:8000";
   
-  let foir = 0;
-  if (monthlyIncome > 0 && applicant.existing_emi != null) {
-    foir = applicant.existing_emi / monthlyIncome;
-  } else if (raw.foir) {
-    foir = Number(raw.foir) / 100; // Assuming raw foir is percentage
-  }
-
-  const engineContext = {
-    writeOffFlag: applicant.last_default ?? raw.hasWriteOff ?? raw.has_write_off ?? false,
-    settlementFlag: raw.settlementFlag ?? false,
-    bureauScore: applicant.cibil_score ?? raw.cibil_score ?? 0,
-    age: applicant.age ?? raw.age ?? 0,
-    declaredIncome: annualIncome,
-    foir_calculated: foir,
-    requestedLoanAmount: applicant.requested_amount ?? raw.requested_amount ?? 0,
-  } as Record<string, any>;
-
-  const ruleResults: any[] = [];
-  let deviations = 0;
-  let finalDecision: DecisionOutcome = "APPROVED";
-  let hardReject = false;
+  // 3. Call python API
+  const res = await fetch(`${PYTHON_API_URL}/api/evaluate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ profile, use_xai: true }),
+  });
   
-  // 4. Evaluate rules strictly in priority order
-  for (const rule of rules) {
-    const val = engineContext[rule.field_name];
-    const isTriggered = evaluateCondition(rule.operator, val, rule.threshold_value);
-    
-    // We only care if it triggered or passed
-    ruleResults.push({
-      rule_id: rule.id,
-      result: isTriggered ? "TRIGGERED" : "PASS",
-      actual_value: val,
-      threshold_at_evaluation: rule.threshold_value
-    });
-
-    if (isTriggered) {
-      if (rule.category === "hard_reject" || rule.category === "eligibility") {
-        hardReject = true;
-        finalDecision = "HARD_REJECT";
-        break; // Short-circuit on hard reject or eligibility fail
-      } else if (rule.category === "scoring") {
-        deviations += (rule.deviation_weight ?? 1);
-      }
-    }
+  if (!res.ok) {
+    throw new Error(`Python API failed: ${await res.text()}`);
   }
 
-  // 5. Compute exceptions & pricing if not hard rejected
-  let eligibleAmount = 0;
-  let riskGrade = "A";
-  let rateBand = "10-12%";
+  // Python API has already saved it to Supabase via persist_to_db
   
-  if (!hardReject) {
-    if (deviations >= 2) {
-      finalDecision = "EXCEPTION_L2";
-      riskGrade = "D";
-      rateBand = "18-24%";
-    } else if (deviations === 1) {
-      finalDecision = "EXCEPTION_L1";
-      riskGrade = "C";
-      rateBand = "14-18%";
-    }
-    
-    const incomeMultiplier = 5;
-    const maxCap = 5000000;
-    const maxByIncome = annualIncome * incomeMultiplier;
-    const requested = engineContext.requestedLoanAmount || maxByIncome;
-    eligibleAmount = Math.min(maxByIncome, maxCap, requested);
-  }
-
-  // 6. Insert evaluation
-  const { data: evaluation, error: evalInsertError } = await adminClient
-    .from("evaluations")
-    .insert({
-      applicant_id: applicantId,
-      final_decision: finalDecision,
-      eligible_amount: hardReject ? null : Math.round(eligibleAmount),
-      interest_rate: hardReject ? null : parseFloat(rateBand), // just grab the number part if possible, or null
-      risk_grade: hardReject ? null : riskGrade,
-      rule_version_snapshot: { version: 1 }, // mock version
-      evaluated_at: new Date().toISOString()
-    })
-    .select()
-    .single();
-
-  if (evalInsertError) {
-    throw evalInsertError;
-  }
-
-  // 7. Insert rule results
-  const resultsToInsert = ruleResults.map(r => ({
-    evaluation_id: evaluation.id,
-    rule_id: r.rule_id,
-    result: r.result,
-    actual_value: typeof r.actual_value === "boolean" ? (r.actual_value ? 1 : 0) : r.actual_value,
-    threshold_at_evaluation: r.threshold_at_evaluation
-  }));
-
-  const { error: resultsInsertError } = await adminClient
-    .from("evaluation_rule_results")
-    .insert(resultsToInsert);
-
-  if (resultsInsertError) {
-    throw resultsInsertError;
-  }
-
   revalidatePath("/applications");
   return { success: true };
 }
@@ -168,7 +56,7 @@ export async function getEvaluationsAction() {
   const { data, error } = await adminClient
     .from("evaluations")
     .select(
-      "id, applicant_id, final_decision, eligible_amount, interest_rate, risk_grade, derived_metrics_json, rule_version_snapshot, evaluated_at"
+      "id, applicant_id, final_decision, eligible_amount, interest_rate, risk_grade, derived_metrics_json, xai_narrative, tool_results_json, api_budget_json, ml_risk_tier, ml_risk_score, rule_version_snapshot, evaluated_at"
     )
     .order("evaluated_at", { ascending: false });
   

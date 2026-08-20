@@ -121,6 +121,7 @@ export interface Evaluation {
   ruleResults: EvaluationRuleResult[];
   /** Which rule version snapshot was used */
   rulesVersion: number;
+  derivedMetrics?: any;
 }
 
 export interface ExceptionCase {
