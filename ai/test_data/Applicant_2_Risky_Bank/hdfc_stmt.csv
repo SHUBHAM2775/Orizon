@@ -1,0 +1,5 @@
+Date,Narration,Withdrawal,Deposit,Balance
+01-01,Salary,,65000,70000
+05-01,EMI Debit,15000,,55000
+10-01,Chq Bounce,5000,,55000
+15-01,Insufficient Funds Rtn,1000,,54000

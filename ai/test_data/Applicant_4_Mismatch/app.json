@@ -1,0 +1,10 @@
+{
+  "applicantId": "MISMATCH-04",
+  "age": 30,
+  "employmentType": "Salaried",
+  "requestedLoanAmount": 800000.0,
+  "requestedTenure": 24,
+  "declaredIncome": 1500000.0,
+  "existingObligations": 50000.0,
+  "bureauScore": 720
+}

@@ -1,0 +1,10 @@
+{
+  "applicantId": "PERFECT-01",
+  "age": 35,
+  "employmentType": "Salaried",
+  "requestedLoanAmount": 500000.0,
+  "requestedTenure": 36,
+  "declaredIncome": 2500000.0,
+  "existingObligations": 20000.0,
+  "bureauScore": 810
+}

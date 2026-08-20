@@ -1,0 +1,10 @@
+{
+  "applicantId": "RISKY-02",
+  "age": 28,
+  "employmentType": "Salaried",
+  "requestedLoanAmount": 1000000.0,
+  "requestedTenure": 48,
+  "declaredIncome": 800000.0,
+  "existingObligations": 15000.0,
+  "bureauScore": 650
+}

@@ -117,12 +117,31 @@ def semantic_validation(profile_dict: Dict[str, Any]) -> List[str]:
   return errors
 
 def map_structured_input(raw_dict: Dict[str, Any]) -> NormalizedApplicantProfile:
-  # 1. Normalize and map schema
+  # 1. Normalize and map schema (fast path — alias dictionary)
   mapped_dict, unmapped_fields = schema_mapping(raw_dict)
+  
+  # 1b. AI Fallback — if there are unmapped fields, try the smart mapper
+  if unmapped_fields:
+    try:
+      from ingestion.smart_mapper import generate_column_mapping, CANONICAL_FIELDS
+      print(f"  [Mapper] {len(unmapped_fields)} unmapped fields. Calling AI fallback...")
+      ai_mapping = generate_column_mapping(unmapped_fields, target_fields=CANONICAL_FIELDS)
+      
+      for raw_key, canonical_key in ai_mapping.items():
+        if canonical_key is not None and canonical_key in [f for f in CANONICAL_FIELDS]:
+          # Move the value from the raw key to the canonical key
+          if raw_key in mapped_dict:
+            mapped_dict[canonical_key] = mapped_dict.pop(raw_key)
+          elif raw_key in raw_dict:
+            mapped_dict[canonical_key] = raw_dict[raw_key]
+          unmapped_fields.remove(raw_key)
+      print(f"  [Mapper] AI resolved. Remaining unmapped: {unmapped_fields}")
+    except Exception as e:
+      print(f"  [Mapper] AI fallback failed: {str(e)}. Continuing with partial mapping.")
   
   # Ensure dpdHistory and itrIncomeLastTwoYears are lists if provided as strings in CSV
   if isinstance(mapped_dict.get('dpdHistory'), str):
-    mapped_dict['dpdHistory'] = [] # Simplified parsing for example
+    mapped_dict['dpdHistory'] = []
   if isinstance(mapped_dict.get('itrIncomeLastTwoYears'), str):
     mapped_dict['itrIncomeLastTwoYears'] = []
   
@@ -150,3 +169,4 @@ def map_structured_input(raw_dict: Dict[str, Any]) -> NormalizedApplicantProfile
   )
   
   return profile
+

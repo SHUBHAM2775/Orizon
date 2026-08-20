@@ -1,3 +1,0 @@
-customer_no,age,job_type,amount_requested,months,salary_month,cibil,is_written_off,bounces,financial_capacity
-APP-005,40,Self-Employed,150000.0,36,120000.0,780,false,0,High
-APP-006,28,Salaried,30000.0,12,60000.0,710,false,0,Medium

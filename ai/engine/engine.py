@@ -29,13 +29,22 @@ def run_bre(profile: NormalizedApplicantProfile) -> DecisionReport:
     policy = load_policy()
     evaluations: List[RuleEvaluation] = []
     
-    # 1. Missing Data Check
-    if profile.missingFields:
+    # 1. Hard gate: if we have truly NOTHING useful, stop immediately
+    has_any_data = any([
+        profile.declaredIncome,
+        profile.bureauScore,
+        profile.requestedLoanAmount,
+    ])
+    if not has_any_data:
         return DecisionReport(
             applicantId=profile.applicantId or "UNKNOWN",
             finalDecision="INSUFFICIENT_DATA",
             ruleEvaluations=[]
         )
+    
+    # 2. Partial-data warning — note what we're missing but continue
+    partial_mode = bool(profile.missingFields)
+
         
     # 2. Compute Derived Metrics
     foir = 0.0
@@ -133,12 +142,14 @@ def run_bre(profile: NormalizedApplicantProfile) -> DecisionReport:
         
     # 7. Loan Sizing & Pricing
     pricing = policy.get("pricing", {})
-    annual_income = (profile.declaredIncome or 0) * 12
-    eligible = min(
-        annual_income * pricing.get("income_multiplier", 5),
-        pricing.get("max_loan_cap", 5000000),
-        profile.requestedLoanAmount or 0
-    )
+    # declaredIncome from ITR is already annual. From salary slip it may be monthly gross.
+    # The reconciler's max-wins ensures the ITR (larger) value wins, so treat as annual.
+    annual_income = profile.declaredIncome or 0
+    max_by_income = annual_income * pricing.get("income_multiplier", 5)
+    max_by_cap = pricing.get("max_loan_cap", 5000000)
+    requested = profile.requestedLoanAmount or max_by_income  # if no request, size to max eligible
+    
+    eligible = min(max_by_income, max_by_cap, requested)
     
     risk_grade = "A"
     rate_band = pricing.get("rates", {}).get("A", "10-12%")
@@ -153,7 +164,7 @@ def run_bre(profile: NormalizedApplicantProfile) -> DecisionReport:
         applicantId=profile.applicantId,
         finalDecision=final_decision,
         riskGrade=risk_grade,
-        eligibleAmount=eligible,
+        eligibleAmount=round(eligible, 2),
         interestRateBand=rate_band,
         ruleEvaluations=evaluations
     )

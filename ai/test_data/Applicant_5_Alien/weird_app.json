@@ -1,0 +1,10 @@
+{
+  "applicantId": "ALIEN-05",
+  "age": 29,
+  "employmentType": "Salaried",
+  "requestedLoanAmount": 200000.0,
+  "requestedTenure": 12,
+  "declaredIncome": 600000.0,
+  "existingObligations": 5000.0,
+  "bureauScore": 750
+}

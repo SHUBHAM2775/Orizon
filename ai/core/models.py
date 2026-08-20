@@ -39,7 +39,7 @@ class StructuredRow(BaseModel):
   model_config = ConfigDict(extra='allow')
 
 class NormalizedApplicantProfile(StructuredRow):
-  sourceType: Literal["structured", "pdf"]
+  sourceType: Literal["structured", "pdf", "synthetic"]
   missingFields: List[str] = []
   unmappedFields: List[str] = []
   validationErrors: List[str] = []
