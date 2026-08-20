@@ -13,11 +13,24 @@
  *   - Approve / Reject buttons with a notes field
  *   - L1 approvers also see an "Escalate to L2" action
  *   - Closed cases shown in a separate section (collapsed by default)
+ *
+ * Data source: real Supabase tables (no mock-store)
+ *   exception_cases → joined with evaluations → joined with applicants
+ *
+ * Schema key facts:
+ *   exception_cases: id, evaluation_id, level, status, assigned_to,
+ *     decided_by, decision_notes, escalated_from (UUID → exception_cases.id),
+ *     decided_at
+ *   evaluations: id, applicant_id, final_decision, eligible_amount,
+ *     interest_rate, evaluated_at
+ *   applicants: id, applicant_ref, ...
+ *   evaluation_rule_results: evaluation_id, rule_id, result,
+ *     actual_value, threshold_at_evaluation + embedded rules
+ *   audit_logs: actor_id, action, target_type, target_id, after_value
  */
 
 import { useEffect, useState, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { useStore } from "@/lib/mock-store";
 import { RoleGuard } from "@/components/dashboard/role-guard";
 import { DashboardShell } from "@/components/dashboard/shell";
 import { IndexCard, IndexCardHeader } from "@/components/ui/index-card";
@@ -29,7 +42,108 @@ import {
   RuleBreakdownTable,
 } from "@/components/dashboard/eval-detail";
 import { cn } from "@/lib/utils";
-import type { ExceptionCase } from "@/lib/mock-data";
+import type { Applicant, Evaluation, EvaluationRuleResult } from "@/lib/mock-data";
+
+// ─── DB row types ──────────────────────────────────────────────────────────────
+
+type ExceptionStatus = "PENDING" | "APPROVED" | "REJECTED" | "ESCALATED";
+type ExceptionLevel  = "L1" | "L2";
+type FinalDecision   = "APPROVED" | "HARD_REJECT" | "EXCEPTION_L1" | "EXCEPTION_L2" | "INSUFFICIENT_DATA";
+
+interface ExceptionCaseRow {
+  id: string;
+  evaluation_id: string;
+  level: ExceptionLevel;
+  status: ExceptionStatus;
+  assigned_to: string | null;
+  decided_by: string | null;
+  decision_notes: string | null;
+  escalated_from: string | null;
+  decided_at: string | null;
+  // Embedded via PostgREST join
+  evaluations: {
+    id: string;
+    applicant_id: string;
+    final_decision: FinalDecision;
+    eligible_amount: number | null;
+    interest_rate: number | null;
+    evaluated_at: string;
+    applicants: {
+      id: string;
+      applicant_ref: string;
+      monthly_income: number | null;
+      requested_amount: number | null;
+      tenure_months: number | null;
+      cibil_score: number | null;
+      existing_emi: number | null;
+      avg_bank_balance: number | null;
+      bounce_count: number | null;
+      last_default: boolean | null;
+      raw_input_json: Record<string, unknown> | null;
+      submitted_by: string | null;
+      created_at: string;
+    };
+  };
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Map an applicants DB row (from nested join) into the legacy Applicant shape */
+function rowToApplicant(
+  row: ExceptionCaseRow["evaluations"]["applicants"],
+): Applicant {
+  const raw = (row.raw_input_json ?? {}) as Record<string, unknown>;
+  const monthlyIncome =
+    row.monthly_income ?? (Number(raw.monthly_income ?? raw.annual_income ?? 0) || 0);
+  let foir = 0;
+  if (monthlyIncome > 0 && row.existing_emi != null) {
+    foir = Math.round((row.existing_emi / monthlyIncome) * 100);
+  }
+  return {
+    id: row.applicant_ref ?? row.id,
+    name: (raw.name as string) ?? row.applicant_ref ?? row.id.slice(0, 8),
+    email: (raw.email as string) ?? "",
+    loanAmount: Number(row.requested_amount ?? raw.requested_amount ?? 0),
+    tenureMonths: Number(row.tenure_months ?? raw.tenure_months ?? 0),
+    cibilScore: Number(row.cibil_score ?? raw.cibil_score ?? 0),
+    foir: Number(raw.foir ?? foir),
+    avgMonthlyBalance: Number(row.avg_bank_balance ?? raw.avg_bank_balance ?? 0),
+    bounceCount: Number(row.bounce_count ?? raw.bounce_count ?? 0),
+    annualIncome: monthlyIncome * 12,
+    hasWriteOff: Boolean(
+      row.last_default ?? raw.hasWriteOff ?? raw.has_write_off ?? false,
+    ),
+    submittedAt: row.created_at,
+    submittedBy: row.submitted_by ?? "",
+  };
+}
+
+/** Map a real evaluation + rule results into the legacy Evaluation shape */
+function rowToEvaluation(
+  evRow: ExceptionCaseRow["evaluations"],
+  ruleResults: EvaluationRuleResult[],
+): Evaluation {
+  const decisionMap: Record<FinalDecision, Evaluation["finalDecision"]> = {
+    APPROVED:           "APPROVED",
+    HARD_REJECT:        "HARD_REJECT",
+    EXCEPTION_L1:       "EXCEPTION_L1",
+    EXCEPTION_L2:       "EXCEPTION_L2",
+    INSUFFICIENT_DATA:  "HARD_REJECT", // closest legacy mapping
+  };
+  return {
+    id: evRow.id,
+    applicantId: evRow.applicants.applicant_ref ?? evRow.applicant_id,
+    runAt: evRow.evaluated_at,
+    runBy: "—",
+    finalDecision: decisionMap[evRow.final_decision] ?? "HARD_REJECT",
+    eligibleAmount: evRow.eligible_amount ?? undefined,
+    interestRateBand: evRow.interest_rate ? `${evRow.interest_rate}%` : undefined,
+    ruleResults,
+    rulesVersion: 1,
+  };
+}
+
+// ─── Page shell ────────────────────────────────────────────────────────────────
 
 export default function ExceptionsPage() {
   return (
@@ -41,86 +155,167 @@ export default function ExceptionsPage() {
   );
 }
 
+// ─── Content ───────────────────────────────────────────────────────────────────
+
 function ExceptionQueueContent() {
-  const {
-    applicants,
-    evaluations,
-    exceptionCases,
-    approveException,
-    rejectException,
-    escalateException,
-    latestEvaluation,
-  } = useStore();
-
-  const [currentUser, setCurrentUser] = useState<{ email: string; role: string; name?: string } | null>(null);
-  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
-  const [notes, setNotes] = useState("");
-  const [actionDone, setActionDone] = useState<string | null>(null);
-
   const supabase = createClient();
 
+  const [currentUser, setCurrentUser] = useState<{
+    id: string;
+    email: string;
+    role: string;
+    name?: string;
+    dbId: string | null; // UUID from users table (for audit_logs.actor_id)
+  } | null>(null);
+
+  const [cases, setCases] = useState<ExceptionCaseRow[] | null>(null);
+  const [casesError, setCasesError] = useState<string | null>(null);
+
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const [notes, setNotes] = useState("");
+  const [actionDone, setActionDone] = useState<ExceptionStatus | null>(null);
+
+  // Rule-result cache per evaluation_id
+  const [ruleResultsCache, setRuleResultsCache] = useState<
+    Record<string, EvaluationRuleResult[] | "loading" | "error">
+  >({});
+
+  // ── Resolve current user ─────────────────────────────────────────────────
   useEffect(() => {
+    let mounted = true;
     async function loadUser() {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (!user?.email) return;
 
       const { data: userData } = await supabase
         .from("users")
-        .select("name, role")
+        .select("id, name, role")
         .eq("email", user.email)
         .single();
-      
-      if (userData) {
+
+      if (mounted && userData) {
         const mappedRole = userData.role.toLowerCase().replace("_", "-");
-        setCurrentUser({ email: user.email, role: mappedRole, name: userData.name });
+        setCurrentUser({
+          id: user.id,           // Supabase auth UUID
+          email: user.email,
+          role: mappedRole,
+          name: userData.name,
+          dbId: userData.id,     // users table UUID (for FK references)
+        });
       }
     }
     loadUser();
+    return () => {
+      mounted = false;
+    };
   }, [supabase]);
 
+  // ── Fetch exception cases (joined with evaluations + applicants) ─────────
+  const loadCases = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("exception_cases")
+      .select(
+        `id, evaluation_id, level, status, assigned_to, decided_by,
+         decision_notes, escalated_from, decided_at,
+         evaluations (
+           id, applicant_id, final_decision, eligible_amount,
+           interest_rate, evaluated_at,
+           applicants (
+             id, applicant_ref, monthly_income, requested_amount,
+             tenure_months, cibil_score, existing_emi, avg_bank_balance,
+             bounce_count, last_default, raw_input_json,
+             submitted_by, created_at
+           )
+         )`,
+      )
+      .order("decided_at", { ascending: false, nullsFirst: true });
 
+    if (error) {
+      setCasesError(error.message);
+      setCases([]);
+    } else {
+      setCasesError(null);
+      // PostgREST returns embedded objects — cast safely
+      setCases((data ?? []) as unknown as ExceptionCaseRow[]);
+    }
+  }, [supabase]);
 
-  const myLevel: "L1" | "L2" =
+  useEffect(() => {
+    loadCases();
+  }, [loadCases]);
+
+  // ── Fetch rule results for the selected evaluation ───────────────────────
+  useEffect(() => {
+    const selectedCase = (cases ?? []).find((c) => c.id === selectedCaseId);
+    if (!selectedCase) return;
+    const evalId = selectedCase.evaluations?.id;
+    if (!evalId || ruleResultsCache[evalId]) return;
+
+    setRuleResultsCache((prev) => ({ ...prev, [evalId]: "loading" }));
+
+    supabase
+      .from("evaluation_rule_results")
+      .select(
+        "id, evaluation_id, rule_id, result, actual_value, threshold_at_evaluation, rules:rule_id ( rule_code, description, field_name, operator, outcome, reason_code )",
+      )
+      .eq("evaluation_id", evalId)
+      .then(({ data, error }) => {
+        if (error) {
+          setRuleResultsCache((prev) => ({ ...prev, [evalId]: "error" }));
+          return;
+        }
+        const mapped: EvaluationRuleResult[] = (data ?? []).map((r: any) => {
+          const rule = Array.isArray(r.rules) ? r.rules[0] : r.rules;
+          const outcome = (rule?.outcome ?? "PASS") as
+            | "HARD_REJECT" | "EXCEPTION_L1" | "EXCEPTION_L2" | "PASS";
+          const mappedOutcome: EvaluationRuleResult["outcome"] =
+            outcome === "PASS" ? "APPROVE_FACTOR" : outcome;
+          const operator = (rule?.operator ?? "GTE").toLowerCase() as
+            EvaluationRuleResult["operator"];
+          return {
+            ruleId: r.rule_id,
+            ruleName: rule?.description ?? rule?.rule_code ?? "Rule",
+            reasonCode: rule?.reason_code ?? rule?.rule_code ?? "",
+            actualValue: r.actual_value ?? 0,
+            thresholdAtEvaluation: r.threshold_at_evaluation,
+            operator,
+            triggered: r.result === "TRIGGERED",
+            outcome: mappedOutcome,
+            explanation: rule?.description ?? "",
+          };
+        });
+        setRuleResultsCache((prev) => ({ ...prev, [evalId]: mapped }));
+      });
+  }, [selectedCaseId, cases, supabase, ruleResultsCache]);
+
+  // ── Derived state ────────────────────────────────────────────────────────
+  const myLevel: ExceptionLevel =
     currentUser?.role === "l2-approver" ? "L2" : "L1";
 
-  const pendingCases = exceptionCases.filter(
-    (c) =>
-      c.status === "PENDING" && c.level === myLevel,
+  const pendingCases = (cases ?? []).filter(
+    (c) => c.status === "PENDING" && c.level === myLevel,
+  );
+  const closedCases = (cases ?? []).filter(
+    (c) => c.status !== "PENDING" && c.level === myLevel,
   );
 
-  const closedCases = exceptionCases.filter(
-    (c) =>
-      c.status !== "PENDING" && c.level === myLevel,
-  );
-
-  const selectedCase = exceptionCases.find((c) => c.id === selectedCaseId);
+  const selectedCase = (cases ?? []).find((c) => c.id === selectedCaseId) ?? null;
   const selectedApplicant = selectedCase
-    ? applicants.find((a) => a.id === selectedCase.applicantId)
-    : null;
-  const selectedEval = selectedCase
-    ? evaluations.find((e) => e.id === selectedCase.evaluationId)
+    ? rowToApplicant(selectedCase.evaluations.applicants)
     : null;
 
-  const handleApprove = useCallback(() => {
-    if (!selectedCase || !currentUser) return;
-    approveException(selectedCase.id, notes, currentUser.email, currentUser.role);
-    setActionDone("APPROVED");
-    setNotes("");
-  }, [selectedCase, notes, currentUser, approveException]);
+  const selectedEvalId = selectedCase?.evaluations?.id ?? null;
+  const selectedRuleResults =
+    selectedEvalId && Array.isArray(ruleResultsCache[selectedEvalId])
+      ? (ruleResultsCache[selectedEvalId] as EvaluationRuleResult[])
+      : null;
 
-  const handleReject = useCallback(() => {
-    if (!selectedCase || !currentUser) return;
-    rejectException(selectedCase.id, notes, currentUser.email, currentUser.role);
-    setActionDone("REJECTED");
-    setNotes("");
-  }, [selectedCase, notes, currentUser, rejectException]);
-
-  const handleEscalate = useCallback(() => {
-    if (!selectedCase || !currentUser) return;
-    escalateException(selectedCase.id, notes, currentUser.email);
-    setActionDone("ESCALATED");
-    setNotes("");
-  }, [selectedCase, notes, currentUser, escalateException]);
+  const selectedEval: Evaluation | null =
+    selectedCase && selectedRuleResults
+      ? rowToEvaluation(selectedCase.evaluations, selectedRuleResults)
+      : null;
 
   const selectCase = useCallback((id: string) => {
     setSelectedCaseId(id);
@@ -128,6 +323,105 @@ function ExceptionQueueContent() {
     setNotes("");
   }, []);
 
+  // ── Write helpers: update exception_cases + insert audit_logs ───────────
+
+  const doDecision = useCallback(
+    async (newStatus: "APPROVED" | "REJECTED") => {
+      if (!selectedCase || !currentUser?.dbId) return;
+
+      const { error } = await supabase
+        .from("exception_cases")
+        .update({
+          status: newStatus,
+          decided_by: currentUser.dbId,
+          decision_notes: notes || null,
+          decided_at: new Date().toISOString(),
+        })
+        .eq("id", selectedCase.id);
+
+      if (error) {
+        console.error("Failed to update exception case:", error.message);
+        return;
+      }
+
+      // Write audit log
+      await supabase.from("audit_logs").insert({
+        actor_id: currentUser.dbId,
+        action: newStatus === "APPROVED" ? "EXCEPTION_APPROVED" : "EXCEPTION_REJECTED",
+        target_type: "exception_cases",
+        target_id: selectedCase.id,
+        after_value: {
+          status: newStatus,
+          notes: notes || null,
+          decided_by: currentUser.email,
+        },
+      });
+
+      setActionDone(newStatus);
+      setNotes("");
+      // Refresh list so status updates are reflected
+      loadCases();
+    },
+    [selectedCase, currentUser, notes, supabase, loadCases],
+  );
+
+  const handleApprove = useCallback(() => doDecision("APPROVED"), [doDecision]);
+  const handleReject  = useCallback(() => doDecision("REJECTED"), [doDecision]);
+
+  const handleEscalate = useCallback(async () => {
+    if (!selectedCase || !currentUser?.dbId || myLevel !== "L1") return;
+
+    // Mark current L1 case as ESCALATED
+    const { error: updateErr } = await supabase
+      .from("exception_cases")
+      .update({
+        status: "ESCALATED",
+        decided_by: currentUser.dbId,
+        decision_notes: notes || null,
+        decided_at: new Date().toISOString(),
+      })
+      .eq("id", selectedCase.id);
+
+    if (updateErr) {
+      console.error("Failed to escalate case:", updateErr.message);
+      return;
+    }
+
+    // Create a new L2 case for the same evaluation
+    const { error: insertErr } = await supabase
+      .from("exception_cases")
+      .insert({
+        evaluation_id: selectedCase.evaluation_id,
+        level: "L2",
+        status: "PENDING",
+        escalated_from: selectedCase.id,
+      });
+
+    if (insertErr) {
+      console.error("Failed to create L2 case:", insertErr.message);
+      return;
+    }
+
+    // Write audit log
+    await supabase.from("audit_logs").insert({
+      actor_id: currentUser.dbId,
+      action: "EXCEPTION_ESCALATED",
+      target_type: "exception_cases",
+      target_id: selectedCase.id,
+      after_value: {
+        status: "ESCALATED",
+        notes: notes || null,
+        escalated_by: currentUser.email,
+        new_level: "L2",
+      },
+    });
+
+    setActionDone("ESCALATED");
+    setNotes("");
+    loadCases();
+  }, [selectedCase, currentUser, notes, myLevel, supabase, loadCases]);
+
+  // ── Loading skeleton ─────────────────────────────────────────────────────
   if (!currentUser) {
     return (
       <div className="space-y-6 max-w-6xl">
@@ -168,31 +462,61 @@ function ExceptionQueueContent() {
     );
   }
 
+  const loadingCases = cases === null;
+
   return (
     <div className="space-y-6 max-w-6xl">
       <div className="border-b border-[color-mix(in_oklch,var(--ink),transparent_88%)] pb-4">
         <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--ink-muted)]">
-          {myLevel} Approver · Exception review queue
+          {myLevel} Approver · Exception review queue · live Supabase data
         </p>
         <h1 className="text-2xl mt-1">Exception Queue</h1>
       </div>
 
+      {casesError && (
+        <p className="text-sm text-[var(--reject)]">
+          Failed to load cases: {casesError}
+        </p>
+      )}
+
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_440px] gap-6 items-start">
-        {/* ── Left: case list ──────────────────────────────────────── */}
+        {/* ── Left: case list ─────────────────────────────────────────── */}
         <div className="space-y-4">
           <IndexCard tabTone="exception" as="div">
             <IndexCardHeader
-              title={`Pending Cases (${pendingCases.length})`}
+              title={`Pending Cases (${loadingCases ? "…" : pendingCases.length})`}
               meta={`Level ${myLevel} queue`}
             />
-            {pendingCases.length === 0 ? (
+
+            {loadingCases && (
+              <div className="-mx-6 -mb-6 mt-4 border-t border-[color-mix(in_oklch,var(--ink),transparent_85%)]">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="flex items-center justify-between gap-4 px-6 py-4 border-b border-[color-mix(in_oklch,var(--ink),transparent_92%)]">
+                    <div className="space-y-2">
+                      <Skeleton className="h-4 w-32" />
+                      <Skeleton className="h-3 w-24" />
+                    </div>
+                    <Skeleton className="h-6 w-16" />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {!loadingCases && pendingCases.length === 0 && (
               <p className="text-sm text-[var(--ink-muted)] mt-2">
-                No pending cases. Cases are routed here by the rule engine.
+                No pending cases. Cases appear here after the rule engine flags
+                an evaluation as EXCEPTION_L{myLevel === "L1" ? "1" : "2"}.
               </p>
-            ) : (
+            )}
+
+            {!loadingCases && pendingCases.length > 0 && (
               <div className="-mx-6 -mb-6 mt-4 border-t border-[color-mix(in_oklch,var(--ink),transparent_85%)]">
                 {pendingCases.map((c) => {
-                  const applicant = applicants.find((a) => a.id === c.applicantId);
+                  const applicant = c.evaluations?.applicants;
+                  const displayName =
+                    (applicant?.raw_input_json as any)?.name ??
+                    applicant?.applicant_ref ??
+                    c.evaluation_id.slice(0, 8);
                   const isSelected = selectedCaseId === c.id;
                   return (
                     <button
@@ -209,20 +533,22 @@ function ExceptionQueueContent() {
                     >
                       <div>
                         <p className="text-sm font-medium text-[var(--ink)]">
-                          {applicant?.name ?? c.applicantId}
+                          {displayName}
                         </p>
                         <p className="font-mono text-[10px] text-[var(--ink-muted)] mt-0.5">
-                          {c.id} · {c.applicantId}
-                          {c.escalatedFrom && " · Escalated from L1"}
+                          {c.id.slice(0, 8)}
+                          {c.escalated_from && " · Escalated from L1"}
                         </p>
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">
-                        <span className={cn(
-                          "font-mono text-[10px] uppercase tracking-wider px-1.5 py-0.5 border rounded-[2px]",
-                          c.level === "L1"
-                            ? "border-[var(--exception)] text-[var(--exception)]"
-                            : "border-[var(--reject)] text-[var(--reject)]",
-                        )}>
+                        <span
+                          className={cn(
+                            "font-mono text-[10px] uppercase tracking-wider px-1.5 py-0.5 border rounded-[2px]",
+                            c.level === "L1"
+                              ? "border-[var(--exception)] text-[var(--exception)]"
+                              : "border-[var(--reject)] text-[var(--reject)]",
+                          )}
+                        >
                           {c.level}
                         </span>
                         <StatusBadge tone="pending" />
@@ -235,45 +561,72 @@ function ExceptionQueueContent() {
           </IndexCard>
 
           {/* Closed cases (collapsed) */}
-          {closedCases.length > 0 && (
-            <ClosedCasesSection cases={closedCases} applicants={applicants} />
+          {!loadingCases && closedCases.length > 0 && (
+            <ClosedCasesSection cases={closedCases} />
           )}
         </div>
 
-        {/* ── Right: decision panel ────────────────────────────────── */}
+        {/* ── Right: decision panel ────────────────────────────────────── */}
         {selectedCase && selectedApplicant ? (
           <div className="space-y-4">
             <ApplicantProfileCard applicant={selectedApplicant} />
 
-            {/* Evaluation summary (if available) */}
-            {selectedEval && (
+            {/* Evaluation summary */}
+            {selectedCase.evaluations && (
               <IndexCard tabTone="default" as="div">
                 <IndexCardHeader
                   title="Triggering Evaluation"
-                  meta={selectedEval.id}
-                  action={<StatusBadge tone={
-                    selectedEval.finalDecision === "EXCEPTION_L1" ? "exception-l1" : "exception-l2"
-                  } />}
+                  meta={selectedCase.evaluation_id.slice(0, 8)}
+                  action={
+                    <StatusBadge
+                      tone={
+                        selectedCase.evaluations.final_decision === "EXCEPTION_L1"
+                          ? "exception-l1"
+                          : "exception-l2"
+                      }
+                    />
+                  }
                 />
-                <p className="text-xs text-[var(--ink-muted)] mt-2">
-                  {selectedEval.ruleResults.filter((r) => r.triggered).map((r) => r.explanation).join(" · ")}
-                </p>
+                {/* Triggered rules summary */}
+                {selectedRuleResults ? (
+                  <p className="text-xs text-[var(--ink-muted)] mt-2">
+                    {selectedRuleResults
+                      .filter((r) => r.triggered)
+                      .map((r) => r.explanation)
+                      .join(" · ") || "No rules triggered."}
+                  </p>
+                ) : (
+                  <Skeleton className="h-3 w-48 mt-2" />
+                )}
               </IndexCard>
             )}
 
             {/* Decision actions */}
             {actionDone ? (
-              <IndexCard tabTone={actionDone === "APPROVED" ? "approve" : "reject"} as="div">
+              <IndexCard
+                tabTone={
+                  actionDone === "APPROVED"
+                    ? "approve"
+                    : actionDone === "REJECTED"
+                    ? "reject"
+                    : "exception"
+                }
+                as="div"
+              >
                 <p className="font-mono text-xs uppercase tracking-wider text-[var(--ink-muted)] mb-1">
                   Action recorded
                 </p>
                 <p className="text-sm text-[var(--ink)]">
-                  Case {selectedCase.id} — <strong>{actionDone}</strong>
+                  Case {selectedCase.id.slice(0, 8)} —{" "}
+                  <strong>{actionDone}</strong>
                 </p>
               </IndexCard>
             ) : selectedCase.status === "PENDING" ? (
               <IndexCard tabTone="brass" as="div">
-                <IndexCardHeader title="Make Decision" meta={selectedCase.id} />
+                <IndexCardHeader
+                  title="Make Decision"
+                  meta={selectedCase.id.slice(0, 8)}
+                />
                 <div className="space-y-4 mt-3">
                   <div>
                     <label
@@ -292,22 +645,10 @@ function ExceptionQueueContent() {
                     />
                   </div>
                   <div className="flex gap-2">
-                    <ActionButton
-                      onClick={handleApprove}
-                      tone="approve"
-                      label="Approve"
-                    />
-                    <ActionButton
-                      onClick={handleReject}
-                      tone="reject"
-                      label="Reject"
-                    />
+                    <ActionButton onClick={handleApprove} tone="approve" label="Approve" />
+                    <ActionButton onClick={handleReject}  tone="reject"   label="Reject"  />
                     {myLevel === "L1" && (
-                      <ActionButton
-                        onClick={handleEscalate}
-                        tone="exception"
-                        label="Escalate → L2"
-                      />
+                      <ActionButton onClick={handleEscalate} tone="exception" label="Escalate → L2" />
                     )}
                   </div>
                 </div>
@@ -316,24 +657,37 @@ function ExceptionQueueContent() {
               <IndexCard tabTone="default" as="div">
                 <p className="text-xs text-[var(--ink-muted)]">
                   This case is already {selectedCase.status.toLowerCase()}.
+                  {selectedCase.decision_notes && (
+                    <span className="block mt-1 italic">
+                      Notes: {selectedCase.decision_notes}
+                    </span>
+                  )}
                 </p>
               </IndexCard>
             )}
 
             {/* Rule breakdown for context */}
-            {selectedEval && (
-              <RuleBreakdownTable results={selectedEval.ruleResults} />
+            {selectedRuleResults && selectedEval && (
+              <RuleBreakdownTable results={selectedRuleResults} />
+            )}
+            {selectedEvalId && ruleResultsCache[selectedEvalId] === "loading" && (
+              <IndexCard tabTone="default" as="div">
+                <Skeleton className="h-5 w-32 mb-2" />
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-3/4 mt-2" />
+              </IndexCard>
             )}
           </div>
         ) : (
           <IndexCard tabTone="default" as="div">
             <p className="text-xs text-[var(--ink-muted)] leading-relaxed">
-              Select a case from the queue to review the applicant profile and make a decision.
+              Select a case from the queue to review the applicant profile and
+              make a decision.
             </p>
-            {pendingCases.length === 0 && (
+            {!loadingCases && pendingCases.length === 0 && (
               <p className="text-xs text-[var(--ink-muted)] leading-relaxed mt-2">
-                Exception cases appear here after an Analyst runs an evaluation that triggers a rule.
-                Go to Applications and run an evaluation for APP1003 (Scenario 3) or APP1004 (Scenario 4).
+                Exception cases appear here after an Analyst runs an evaluation
+                that the rule engine flags as EXCEPTION_L1 or EXCEPTION_L2.
               </p>
             )}
           </IndexCard>
@@ -342,6 +696,8 @@ function ExceptionQueueContent() {
     </div>
   );
 }
+
+// ─── Sub-components ────────────────────────────────────────────────────────────
 
 function ActionButton({
   onClick,
@@ -352,7 +708,12 @@ function ActionButton({
   tone: "approve" | "reject" | "exception";
   label: string;
 }) {
-  const colorVar = tone === "approve" ? "var(--approve)" : tone === "reject" ? "var(--reject)" : "var(--exception)";
+  const colorVar =
+    tone === "approve"
+      ? "var(--approve)"
+      : tone === "reject"
+      ? "var(--reject)"
+      : "var(--exception)";
   return (
     <button
       onClick={onClick}
@@ -368,13 +729,7 @@ function ActionButton({
   );
 }
 
-function ClosedCasesSection({
-  cases,
-  applicants,
-}: {
-  cases: ExceptionCase[];
-  applicants: { id: string; name: string }[];
-}) {
+function ClosedCasesSection({ cases }: { cases: ExceptionCaseRow[] }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -393,15 +748,21 @@ function ClosedCasesSection({
       {expanded && (
         <div className="-mx-6 -mb-6 mt-4 border-t border-[color-mix(in_oklch,var(--ink),transparent_85%)]">
           {cases.map((c) => {
-            const applicant = applicants.find((a) => a.id === c.applicantId);
+            const applicant = c.evaluations?.applicants;
+            const displayName =
+              (applicant?.raw_input_json as any)?.name ??
+              applicant?.applicant_ref ??
+              c.id.slice(0, 8);
             return (
               <div
                 key={c.id}
                 className="flex items-center justify-between gap-4 px-6 py-3 border-b border-[color-mix(in_oklch,var(--ink),transparent_92%)] last:border-0"
               >
                 <div>
-                  <p className="text-sm text-[var(--ink)]">{applicant?.name ?? c.applicantId}</p>
-                  <p className="font-mono text-[10px] text-[var(--ink-muted)]">{c.id}</p>
+                  <p className="text-sm text-[var(--ink)]">{displayName}</p>
+                  <p className="font-mono text-[10px] text-[var(--ink-muted)]">
+                    {c.id.slice(0, 8)}
+                  </p>
                 </div>
                 <StatusBadge
                   tone={
