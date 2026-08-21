@@ -133,47 +133,19 @@ def _build_context(applicant, ml_result, tool_results, policy_result) -> str:
 
 
 def _fallback_narrative(ml_result, tool_results, policy_result) -> Tuple[str, List[str]]:
-    """Template-based narrative when LLM is unavailable or budget exhausted."""
-    lines = [
-        f"Decision: {policy_result.final_decision}",
-        f"Risk Tier: {ml_result.risk_tier} | ML Score: {ml_result.risk_score} | Final Score: {policy_result.final_score}",
-        f"Risk Grade: {policy_result.risk_grade} | Interest Band: {policy_result.interest_rate_band}",
-        "",
-    ]
-
-    # Tools summary
-    ran = [t for t in tool_results if t.ran]
-    if ran:
-        lines.append("Tool Adjustments:")
-        for t in ran:
-            lines.append(f"  • {t.tool_id}: {t.adjustment_applied:+.4f} ({t.confidence})")
-            for r in t.key_reasons[:2]:
-                lines.append(f"    → {r}")
-
-    lines.append(f"\nCombined Adjustment: {policy_result.combined_tool_adjustment:+.4f}")
-
-    # FOIR
-    if policy_result.foir_adjustment and policy_result.foir_adjustment.triggered:
-        fa = policy_result.foir_adjustment
-        status = "cleared" if fa.cleared else "not cleared"
-        lines.append(f"\nFOIR Status: {status}")
-        if fa.final_amount:
-            lines.append(f"  Eligible Amount: ₹{fa.final_amount:,.0f}")
-        for a in fa.attempts:
-            lines.append(f"  Attempt {a['attempt']}: ₹{a['amount']:,.0f} (FOIR {a['foir']:.2%})")
-
-    # SHAP
-    if ml_result.top_contributing_factors:
-        lines.append("\nTop Contributing Factors:")
-        for f in ml_result.top_contributing_factors[:5]:
-            lines.append(f"  • {f.feature}: {f.shap_value:+.4f} ({f.direction})")
-
-    lines.append(f"\nMax Eligible Amount: {policy_result.max_eligible_amount}")
-    lines.append(f"Escalation: {policy_result.escalation_authority or 'N/A'}")
-
+    """Concise 2-3 sentence template narrative when LLM is unavailable."""
+    adj = policy_result.combined_tool_adjustment
+    adjustment_str = f"a positive adjustment of {adj:+.4f}" if adj >= 0 else f"a negative adjustment of {adj:+.4f}"
+    
+    sentence1 = f"The application has been resolved as {policy_result.final_decision} with a final underwriting score of {policy_result.final_score:.2f}."
+    sentence2 = f"This decision reflects an initial risk tier of {ml_result.risk_tier} combined with {adjustment_str} from the agentic verification tools."
+    sentence3 = f"A maximum eligible limit of ₹{policy_result.max_eligible_amount or 0:,.2f} is established under escalation authority {policy_result.escalation_authority or 'SYSTEM_AUTO'}."
+    
+    narrative = f"{sentence1} {sentence2} {sentence3}"
+    
     actionable_steps = [
         "Ensure declared income reflects all verifiable sources to improve FOIR.",
         "Maintain a stable average bank balance and clear past dues to improve bureau score."
     ]
 
-    return "\n".join(lines), actionable_steps
+    return narrative, actionable_steps
