@@ -145,9 +145,14 @@ export function EvalSummaryCard({ evaluation, applicant }: { evaluation: Evaluat
         />
 
         <div className="flex-1 space-y-3 mt-2">
-          {evaluation.finalDecision === "APPROVED" && evaluation.eligibleAmount && (
+          {evaluation.finalDecision === "APPROVED" && (
             <>
-              <DetailRow label="Eligible amount" value={fmtINR(evaluation.eligibleAmount)} />
+              {evaluation.approvedByEmail && (
+                <DetailRow label="Approved by" value={evaluation.approvedByEmail} />
+              )}
+              {evaluation.eligibleAmount && (
+                <DetailRow label="Eligible amount" value={fmtINR(evaluation.eligibleAmount)} />
+              )}
               <DetailRow label="Interest rate band" value={evaluation.interestRateBand ?? "—"} />
             </>
           )}

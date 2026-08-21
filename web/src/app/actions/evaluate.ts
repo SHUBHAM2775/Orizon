@@ -77,7 +77,7 @@ export async function getEvaluationsAction() {
   const { data, error } = await adminClient
     .from("evaluations")
     .select(
-      "id, applicant_id, final_decision, eligible_amount, interest_rate, risk_grade, derived_metrics_json, xai_narrative, tool_results_json, api_budget_json, ml_risk_tier, ml_risk_score, rule_version_snapshot, evaluated_at"
+      "id, applicant_id, final_decision, eligible_amount, interest_rate, risk_grade, derived_metrics_json, xai_narrative, tool_results_json, api_budget_json, ml_risk_tier, ml_risk_score, rule_version_snapshot, evaluated_at, approved_by_email"
     )
     .order("evaluated_at", { ascending: false });
   
@@ -94,7 +94,107 @@ export async function getEvaluationRuleResultsAction(evaluationId: string) {
     )
     .eq("evaluation_id", evaluationId);
     
+    if (error) throw new Error(error.message);
+    return data;
+}
+
+export async function getExceptionCasesAction() {
+  const adminClient = createAdminClient();
+  const { data, error } = await adminClient
+    .from("exception_cases")
+    .select(
+      `id, evaluation_id, level, status, assigned_to, decided_by,
+       decision_notes, escalated_from, decided_at,
+       evaluations (
+         id, applicant_id, final_decision, eligible_amount,
+         interest_rate, evaluated_at, approved_by_email,
+         derived_metrics_json, xai_narrative, tool_results_json, api_budget_json, ml_risk_tier, ml_risk_score, rule_version_snapshot,
+         applicants (
+           id, applicant_ref, monthly_income, requested_amount,
+           tenure_months, cibil_score, existing_emi, avg_bank_balance,
+           bounce_count, last_default, raw_input_json,
+           submitted_by, created_at
+         )
+       )`
+    )
+    .order("decided_at", { ascending: false, nullsFirst: true });
+
   if (error) throw new Error(error.message);
   return data;
 }
 
+export async function updateExceptionCaseAction(
+  caseId: string,
+  evaluationId: string,
+  newStatus: "APPROVED" | "REJECTED",
+  notes: string,
+  decidedByDbId: string,
+  decidedByEmail: string
+) {
+  const adminClient = createAdminClient();
+  
+  // Update exception_case
+  const { error: exError } = await adminClient
+    .from("exception_cases")
+    .update({
+      status: newStatus,
+      decided_by: decidedByDbId,
+      decision_notes: notes || null,
+      decided_at: new Date().toISOString(),
+    })
+    .eq("id", caseId);
+  if (exError) throw new Error(exError.message);
+
+  // Update evaluation
+  const { error: evalError } = await adminClient
+    .from("evaluations")
+    .update({ 
+      final_decision: newStatus,
+      approved_by_email: newStatus === "APPROVED" ? decidedByEmail : null
+    })
+    .eq("id", evaluationId);
+  if (evalError) throw new Error(evalError.message);
+
+  return { success: true };
+}
+
+export async function escalateExceptionCaseAction(
+  caseId: string,
+  evaluationId: string,
+  notes: string,
+  escalatedByDbId: string
+) {
+  const adminClient = createAdminClient();
+
+  // Mark current L1 case as ESCALATED
+  const { error: updateErr } = await adminClient
+    .from("exception_cases")
+    .update({
+      status: "ESCALATED",
+      decided_by: escalatedByDbId,
+      decision_notes: notes || null,
+      decided_at: new Date().toISOString(),
+    })
+    .eq("id", caseId);
+  if (updateErr) throw new Error(updateErr.message);
+
+  // Create L2 case
+  const { error: insertErr } = await adminClient
+    .from("exception_cases")
+    .insert({
+      evaluation_id: evaluationId,
+      level: "L2",
+      status: "PENDING",
+      escalated_from: caseId,
+    });
+  if (insertErr) throw new Error(insertErr.message);
+
+  // Update evaluation
+  const { error: evalUpdateErr } = await adminClient
+    .from("evaluations")
+    .update({ final_decision: "EXCEPTION_L2" })
+    .eq("id", evaluationId);
+  if (evalUpdateErr) throw new Error(evalUpdateErr.message);
+
+  return { success: true };
+}

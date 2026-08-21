@@ -40,9 +40,16 @@ import {
   ApplicantProfileCard,
   EvalSummaryCard,
   ActionableStepsCard,
+  ToolResultsCard,
+  XAINarrativeCard,
 } from "@/components/dashboard/eval-detail";
 import { cn } from "@/lib/utils";
 import type { Applicant, Evaluation, EvaluationRuleResult } from "@/lib/mock-data";
+import { 
+  getExceptionCasesAction, 
+  updateExceptionCaseAction, 
+  escalateExceptionCaseAction 
+} from "@/app/actions/evaluate";
 
 // ─── DB row types ──────────────────────────────────────────────────────────────
 
@@ -68,6 +75,14 @@ interface ExceptionCaseRow {
     eligible_amount: number | null;
     interest_rate: number | null;
     evaluated_at: string;
+    approved_by_email: string | null;
+    derived_metrics_json: Record<string, any> | null;
+    xai_narrative: string | null;
+    tool_results_json: Record<string, any> | null;
+    api_budget_json: Record<string, any> | null;
+    ml_risk_tier: string | null;
+    ml_risk_score: number | null;
+    rule_version_snapshot: Record<string, any> | null;
     applicants: {
       id: string;
       applicant_ref: string;
@@ -138,8 +153,19 @@ function rowToEvaluation(
     finalDecision: decisionMap[evRow.final_decision] ?? "HARD_REJECT",
     eligibleAmount: evRow.eligible_amount ?? undefined,
     interestRateBand: evRow.interest_rate ? `${evRow.interest_rate}%` : undefined,
+    approvedByEmail: evRow.approved_by_email ?? undefined,
+    rulesVersion: (evRow.rule_version_snapshot as any)?.version ?? 1,
     ruleResults,
-    rulesVersion: 1,
+    derivedMetrics: {
+      ...evRow.derived_metrics_json,
+      xai_narrative: evRow.xai_narrative ?? evRow.derived_metrics_json?.xai_narrative,
+      tool_results: evRow.tool_results_json ?? evRow.derived_metrics_json?.tool_results,
+      api_budget_summary: evRow.api_budget_json ?? evRow.derived_metrics_json?.api_budget_summary,
+      ml_result: {
+        risk_tier: evRow.ml_risk_tier ?? evRow.derived_metrics_json?.ml_result?.risk_tier,
+        risk_score: evRow.ml_risk_score ?? evRow.derived_metrics_json?.ml_result?.risk_score,
+      }
+    },
   };
 }
 
@@ -214,33 +240,15 @@ function ExceptionQueueContent() {
 
   // ── Fetch exception cases (joined with evaluations + applicants) ─────────
   const loadCases = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("exception_cases")
-      .select(
-        `id, evaluation_id, level, status, assigned_to, decided_by,
-         decision_notes, escalated_from, decided_at,
-         evaluations (
-           id, applicant_id, final_decision, eligible_amount,
-           interest_rate, evaluated_at,
-           applicants (
-             id, applicant_ref, monthly_income, requested_amount,
-             tenure_months, cibil_score, existing_emi, avg_bank_balance,
-             bounce_count, last_default, raw_input_json,
-             submitted_by, created_at
-           )
-         )`,
-      )
-      .order("decided_at", { ascending: false, nullsFirst: true });
-
-    if (error) {
+    try {
+      const data = await getExceptionCasesAction();
+      setCasesError(null);
+      setCases((data ?? []) as unknown as ExceptionCaseRow[]);
+    } catch (error: any) {
       setCasesError(error.message);
       setCases([]);
-    } else {
-      setCasesError(null);
-      // PostgREST returns embedded objects — cast safely
-      setCases((data ?? []) as unknown as ExceptionCaseRow[]);
     }
-  }, [supabase]);
+  }, []);
 
   useEffect(() => {
     loadCases();
@@ -329,17 +337,16 @@ function ExceptionQueueContent() {
     async (newStatus: "APPROVED" | "REJECTED") => {
       if (!selectedCase || !currentUser?.dbId) return;
 
-      const { error } = await supabase
-        .from("exception_cases")
-        .update({
-          status: newStatus,
-          decided_by: currentUser.dbId,
-          decision_notes: notes || null,
-          decided_at: new Date().toISOString(),
-        })
-        .eq("id", selectedCase.id);
-
-      if (error) {
+      try {
+        await updateExceptionCaseAction(
+          selectedCase.id,
+          selectedCase.evaluation_id,
+          newStatus,
+          notes || "",
+          currentUser.dbId,
+          currentUser.email
+        );
+      } catch (error: any) {
         console.error("Failed to update exception case:", error.message);
         return;
       }
@@ -371,34 +378,15 @@ function ExceptionQueueContent() {
   const handleEscalate = useCallback(async () => {
     if (!selectedCase || !currentUser?.dbId || myLevel !== "L1") return;
 
-    // Mark current L1 case as ESCALATED
-    const { error: updateErr } = await supabase
-      .from("exception_cases")
-      .update({
-        status: "ESCALATED",
-        decided_by: currentUser.dbId,
-        decision_notes: notes || null,
-        decided_at: new Date().toISOString(),
-      })
-      .eq("id", selectedCase.id);
-
-    if (updateErr) {
-      console.error("Failed to escalate case:", updateErr.message);
-      return;
-    }
-
-    // Create a new L2 case for the same evaluation
-    const { error: insertErr } = await supabase
-      .from("exception_cases")
-      .insert({
-        evaluation_id: selectedCase.evaluation_id,
-        level: "L2",
-        status: "PENDING",
-        escalated_from: selectedCase.id,
-      });
-
-    if (insertErr) {
-      console.error("Failed to create L2 case:", insertErr.message);
+    try {
+      await escalateExceptionCaseAction(
+        selectedCase.id,
+        selectedCase.evaluation_id,
+        notes || "",
+        currentUser.dbId
+      );
+    } catch (error: any) {
+      console.error("Failed to escalate case:", error.message);
       return;
     }
 
@@ -572,34 +560,19 @@ function ExceptionQueueContent() {
             <ApplicantProfileCard applicant={selectedApplicant} />
 
             {/* Evaluation summary */}
-            {selectedCase.evaluations && (
-              <IndexCard tabTone="default" as="div">
-                <IndexCardHeader
-                  title="Triggering Evaluation"
-                  meta={selectedCase.evaluation_id.slice(0, 8)}
-                  action={
-                    <StatusBadge
-                      tone={
-                        selectedCase.evaluations.final_decision === "EXCEPTION_L1"
-                          ? "exception-l1"
-                          : "exception-l2"
-                      }
-                    />
-                  }
-                />
-                {/* Triggered rules summary */}
-                {selectedRuleResults ? (
-                  <p className="text-xs text-[var(--ink-muted)] mt-2">
-                    {selectedRuleResults
-                      .filter((r) => r.triggered)
-                      .map((r) => r.explanation)
-                      .join(" · ") || "No rules triggered."}
-                  </p>
-                ) : (
-                  <Skeleton className="h-3 w-48 mt-2" />
+            {selectedEval ? (
+              <div className="space-y-4">
+                <EvalSummaryCard evaluation={selectedEval} applicant={selectedApplicant} />
+                {selectedEval.derivedMetrics?.tool_results && (
+                  <ToolResultsCard toolResults={selectedEval.derivedMetrics.tool_results} />
                 )}
-              </IndexCard>
-            )}
+                {selectedEval.derivedMetrics?.xai_narrative && (
+                  <XAINarrativeCard narrative={selectedEval.derivedMetrics.xai_narrative} />
+                )}
+              </div>
+            ) : selectedCase.evaluations ? (
+              <Skeleton className="h-32 w-full" />
+            ) : null}
 
             {/* Decision actions */}
             {actionDone ? (

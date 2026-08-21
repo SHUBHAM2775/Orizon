@@ -133,6 +133,16 @@ def persist_to_db(profile_data: dict, decision_data: dict):
             if results_to_insert:
                 supabase.table("evaluation_rule_results").insert(results_to_insert).execute()
                 
+        # Insert into exception_cases if final_decision is EXCEPTION_L1 or EXCEPTION_L2
+        final_decision = decision_data.get("policy_result", {}).get("final_decision", "")
+        if final_decision in ["EXCEPTION_L1", "EXCEPTION_L2"]:
+            level = "L1" if final_decision == "EXCEPTION_L1" else "L2"
+            supabase.table("exception_cases").insert({
+                "evaluation_id": eval_db_id,
+                "level": level,
+                "status": "PENDING"
+            }).execute()
+                
         print(f"Successfully persisted evaluation for {applicant_ref}")
     except Exception as e:
         import traceback

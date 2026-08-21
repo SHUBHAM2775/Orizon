@@ -118,6 +118,8 @@ export interface Evaluation {
   eligibleAmount?: number;
   /** Interest rate band (only set when APPROVED) */
   interestRateBand?: string;
+  /** The email of the person who approved it, if applicable */
+  approvedByEmail?: string;
   ruleResults: EvaluationRuleResult[];
   /** Which rule version snapshot was used */
   rulesVersion: number;

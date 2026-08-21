@@ -92,6 +92,7 @@ type EvaluationRow = {
   ml_risk_score: number | null;
   rule_version_snapshot: Record<string, any> | null;
   evaluated_at: string;
+  approved_by_email: string | null;
 };
 
 /**
@@ -334,6 +335,7 @@ function AnalystContent() {
     finalDecision: latestRealEval.final_decision,
     eligibleAmount: latestRealEval.eligible_amount ?? undefined,
     interestRateBand: latestRealEval.interest_rate ? `${latestRealEval.interest_rate}%` : undefined,
+    approvedByEmail: latestRealEval.approved_by_email ?? undefined,
     rulesVersion: (latestRealEval.rule_version_snapshot as any)?.version ?? 1,
     ruleResults: ruleResults ?? [],
     derivedMetrics: {

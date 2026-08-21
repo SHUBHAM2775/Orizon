@@ -1,0 +1,11 @@
+{
+  "applicantId": "APP-L1-001",
+  "age": 35,
+  "employmentType": "Salaried",
+  "declaredIncome": 80000,
+  "bureauScore": 750,
+  "requestedLoanAmount": 1000000,
+  "tenureMonths": 24,
+  "existingObligations": 40000,
+  "hasWriteOff": false
+}

@@ -61,7 +61,7 @@ The decision has ALREADY been made. Your job is to EXPLAIN it — not to suggest
 
 You MUST respond in strict JSON format matching exactly this schema:
 {
-  "narrative": "A VERY CONCISE summary (under 50 words) of what drove the score up/down and a brief summary of the decision.",
+  "narrative": "A VERY CONCISE summary (MAXIMUM 2-3 SENTENCES) explaining the purpose of everything and what drove the score up/down, along with a brief summary of the decision.",
   "actionable_steps": [
     "A clear, concise step the applicant can take to improve their chances (e.g., 'Reduce FOIR below 40%').",
     "Another optional step."
