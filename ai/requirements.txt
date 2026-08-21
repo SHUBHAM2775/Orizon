@@ -5,3 +5,7 @@ pydantic
 pandas
 pymupdf
 groq
+supabase
+joblib
+scikit-learn==1.6.1
+xgboost

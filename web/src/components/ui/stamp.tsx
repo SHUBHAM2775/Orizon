@@ -49,6 +49,11 @@ const TONE_CONFIG = {
     label: "EXCEPTION · L2",
     ariaLabel: "Decision: Exception — Level 2 review required",
   },
+  pending: {
+    color: "var(--ink-muted)",
+    label: "PENDING",
+    ariaLabel: "Decision: Pending",
+  },
 } as const;
 
 export type StampTone = keyof typeof TONE_CONFIG;

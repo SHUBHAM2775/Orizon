@@ -26,21 +26,25 @@ import type {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function decisionToStampTone(d: DecisionOutcome) {
+function decisionToStampTone(d: string) {
   switch (d) {
     case "APPROVED":       return "approve" as const;
     case "HARD_REJECT":    return "reject" as const;
+    case "REJECTED":       return "reject" as const;
     case "EXCEPTION_L1":   return "exception-l1" as const;
     case "EXCEPTION_L2":   return "exception-l2" as const;
+    default:               return "pending" as const;
   }
 }
 
-function decisionToBadgeTone(d: DecisionOutcome) {
+function decisionToBadgeTone(d: string) {
   switch (d) {
     case "APPROVED":       return "approve" as const;
     case "HARD_REJECT":    return "reject" as const;
+    case "REJECTED":       return "reject" as const;
     case "EXCEPTION_L1":   return "exception-l1" as const;
     case "EXCEPTION_L2":   return "exception-l2" as const;
+    default:               return "pending" as const;
   }
 }
 
