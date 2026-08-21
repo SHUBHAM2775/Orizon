@@ -281,3 +281,101 @@ export function XAINarrativeCard({ narrative }: { narrative: string }) {
     </IndexCard>
   );
 }
+
+import { useState } from "react";
+import { simulateScenarioAction } from "@/app/actions/evaluate";
+
+export function WhatIfSimulatorCard({ evaluationId }: { evaluationId: string }) {
+  const [question, setQuestion] = useState("");
+  const [history, setHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  async function handleSimulate() {
+    if (!question.trim() || loading) return;
+    
+    setLoading(true);
+    const userMsg = { role: "user" as const, content: question };
+    setHistory((prev) => [...prev, userMsg]);
+    const activeQuestion = question;
+    setQuestion("");
+
+    try {
+      const apiHistory = history.map((h) => ({ role: h.role, content: h.content }));
+      const result = await simulateScenarioAction(evaluationId, activeQuestion, apiHistory);
+      
+      if (result && result.narrative) {
+        setHistory((prev) => [...prev, { role: "assistant", content: result.narrative }]);
+      } else {
+        setHistory((prev) => [...prev, { role: "assistant", content: "Simulation completed but no analysis was generated." }]);
+      }
+    } catch (err: any) {
+      setHistory((prev) => [...prev, { role: "assistant", content: `Error: ${err.message || "Failed to run simulation."}` }]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <IndexCard tabTone="brass" as="div">
+      <IndexCardHeader
+        title="What-If Scenario Simulator"
+        meta="Agentic policy & score prediction"
+      />
+      
+      <div className="mt-4 space-y-4">
+        {/* Chat History */}
+        {history.length > 0 && (
+          <div className="space-y-3 max-h-72 overflow-y-auto pr-1 border-b border-[color-mix(in_oklch,var(--ink),transparent_92%)] pb-4">
+            {history.map((msg, idx) => (
+              <div
+                key={idx}
+                className={cn(
+                  "p-3 rounded-[var(--radius-sm)] text-xs leading-relaxed",
+                  msg.role === "user"
+                    ? "bg-[color-mix(in_oklch,var(--brass),transparent_93%)] border-l-2 border-[var(--brass)] text-[var(--ink)]"
+                    : "bg-[color-mix(in_oklch,var(--paper),var(--ink)_2%)] text-[var(--ink)] whitespace-pre-line"
+                )}
+              >
+                <div className="font-mono text-[9px] uppercase tracking-wider text-[var(--ink-muted)] mb-1">
+                  {msg.role === "user" ? "Query" : "Simulation Outcome"}
+                </div>
+                {msg.content}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Input area */}
+        <div className="flex gap-2 items-center">
+          <div className="flex-1">
+            <textarea
+              rows={2}
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              placeholder="Ask a scenario (e.g. 'What if average balance drops by half but CIBIL increases to 780?')"
+              className="w-full bg-[var(--paper)] border border-[color-mix(in_oklch,var(--ink),transparent_75%)] rounded-[var(--radius-sm)] px-3 py-2 text-xs text-[var(--ink)] placeholder:text-[color-mix(in_oklch,var(--ink-muted),transparent_40%)] focus:outline-none focus:ring-1 focus:ring-[var(--brass)] resize-none"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSimulate();
+                }
+              }}
+            />
+          </div>
+          <button
+            onClick={handleSimulate}
+            disabled={loading || !question.trim()}
+            className={cn(
+              "px-4 py-2 border rounded-[var(--radius-sm)] text-xs font-mono uppercase tracking-wider transition-colors duration-150 h-10 flex items-center justify-center min-w-28",
+              loading || !question.trim()
+                ? "border-[color-mix(in_oklch,var(--ink),transparent_80%)] text-[color-mix(in_oklch,var(--ink-muted),transparent_40%)] bg-transparent cursor-not-allowed"
+                : "border-[var(--brass)] text-[var(--brass)] bg-[color-mix(in_oklch,var(--brass),transparent_93%)] hover:bg-[color-mix(in_oklch,var(--brass),transparent_88%)]"
+            )}
+          >
+            {loading ? "Simulating..." : "Simulate"}
+          </button>
+        </div>
+      </div>
+    </IndexCard>
+  );
+}

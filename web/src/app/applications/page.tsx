@@ -30,6 +30,7 @@ import {
   XAINarrativeCard,
   ActionableStepsCard,
   ToolResultsCard,
+  WhatIfSimulatorCard,
 } from "@/components/dashboard/eval-detail";
 import { cn } from "@/lib/utils";
 import { FileUploadSection } from "@/components/applications/file-upload";
@@ -495,7 +496,12 @@ function AnalystContent() {
               <p className="text-xs text-[var(--reject)]">Failed to load rule breakdown: {rulesError}</p>
             </IndexCard>
           ) : (
-            <ActionableStepsCard steps={latestRealEval.derived_metrics_json?.actionable_steps || []} />
+            <>
+              <ActionableStepsCard steps={latestRealEval.derived_metrics_json?.actionable_steps || []} />
+              <div className="mt-4">
+                <WhatIfSimulatorCard evaluationId={latestRealEval.id} />
+              </div>
+            </>
           )
         )}
         </div>

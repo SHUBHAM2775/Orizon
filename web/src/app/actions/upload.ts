@@ -223,11 +223,16 @@ export async function deleteApplicantAction(id: string) {
       .select("id")
       .eq("applicant_id", id);
 
-    // 2. Delete rule results for those evaluations first
+    // 2. Delete related records for those evaluations first
     if (evals && evals.length > 0) {
       for (const ev of evals) {
         await supabaseAdmin
           .from("evaluation_rule_results")
+          .delete()
+          .eq("evaluation_id", ev.id);
+
+        await supabaseAdmin
+          .from("exception_cases")
           .delete()
           .eq("evaluation_id", ev.id);
       }

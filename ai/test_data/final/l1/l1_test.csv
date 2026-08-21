@@ -1,0 +1,2 @@
+applicantId,age,employmentType,declaredIncome,bureauScore,requestedLoanAmount,tenureMonths,existingObligations,hasWriteOff
+APP-L1-001,35,Salaried,80000,680,1000000,24,25000,False

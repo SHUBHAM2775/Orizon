@@ -198,3 +198,52 @@ export async function escalateExceptionCaseAction(
 
   return { success: true };
 }
+
+export async function simulateScenarioAction(evaluationId: string, question: string, history: any[]) {
+  const adminClient = createAdminClient();
+  const { data: evaluation, error: evalError } = await adminClient
+    .from("evaluations")
+    .select("*, applicants(*)")
+    .eq("id", evaluationId)
+    .single();
+
+  if (evalError || !evaluation) {
+    throw new Error("Evaluation not found");
+  }
+
+  const applicant = (evaluation as any).applicants;
+  if (!applicant) {
+    throw new Error("Applicant not found");
+  }
+
+  const raw = applicant.raw_input_json || {};
+  const profile = {
+    ...raw,
+    applicantId: applicant.applicant_ref,
+    age: applicant.age ?? raw.age,
+    employmentType: applicant.employment_type ?? raw.employmentType,
+    requestedLoanAmount: applicant.requested_amount ?? raw.requested_amount,
+    tenureMonths: applicant.tenure_months ?? raw.tenure_months,
+    declaredIncome: applicant.monthly_income ?? raw.monthly_income ?? raw.annual_income,
+    bureauScore: applicant.cibil_score ?? raw.cibil_score,
+    hasWriteOff: applicant.last_default ?? raw.hasWriteOff ?? raw.has_write_off,
+  };
+
+  const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://localhost:8000";
+  const res = await fetch(`${PYTHON_API_URL}/api/simulate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      applicant_profile: profile,
+      decision_context: evaluation.derived_metrics_json,
+      question,
+      history,
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Simulation failed: ${await res.text()}`);
+  }
+
+  return await res.json();
+}

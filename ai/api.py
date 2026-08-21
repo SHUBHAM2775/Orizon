@@ -293,11 +293,109 @@ async def process_pdf(files: List[UploadFile] = File(...)):
         
     return [p.model_dump(exclude_none=True) for p in all_profiles]
 
+class SimulationRequest(BaseModel):
+    applicant_profile: dict
+    decision_context: dict
+    question: str
+    history: List[dict] = []
+
+@app.post("/api/simulate")
+async def simulate_scenario(req: SimulationRequest):
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="GROQ_API_KEY environment variable is not set")
+    
+    from groq import Groq
+    client = Groq(api_key=api_key)
+    
+    try:
+        # Loop 1: Propose parameter modifications
+        loop1_system = (
+            "You are the Hypothesis Generator of a credit underwriting simulation engine. "
+            "Based on the applicant's profile, original decision context, and the user's what-if question, "
+            "determine which numeric/boolean parameters in the applicant's profile should be adjusted to simulate: "
+            "1) A 'best_case' scenario reflecting the question's premise. "
+            "2) A 'worst_case' scenario reflecting the question's premise. "
+            "Only suggest adjustments to existing NormalizedApplicantProfile fields (e.g. declaredIncome, requestedLoanAmount, bureauScore, existingObligations, bankAvgBalance, declaredAssets). "
+            "Response MUST be a JSON matching: "
+            "{\"best_case_modifications\": { \"fieldName\": value }, \"worst_case_modifications\": { \"fieldName\": value }}"
+        )
+        
+        loop1_user = json.dumps({
+            "applicant": req.applicant_profile,
+            "decision": req.decision_context,
+            "question": req.question,
+            "history": req.history
+        })
+        
+        response1 = client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[
+                {"role": "system", "content": loop1_system},
+                {"role": "user", "content": loop1_user}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0
+        )
+        modifications = json.loads(response1.choices[0].message.content)
+        
+        best_mods = modifications.get("best_case_modifications", {})
+        worst_mods = modifications.get("worst_case_modifications", {})
+        
+        # Loop 2: Fetch derived_metrics_json from DB instead of running underwriting
+        derived_metrics_str = "{}"
+        if supabase:
+            applicant_ref = req.applicant_profile.get("applicantId", "")
+            if applicant_ref:
+                applicant_res = supabase.table("applicants").select("id").eq("applicant_ref", applicant_ref).execute()
+                if applicant_res.data:
+                    applicant_db_id = applicant_res.data[0]["id"]
+                    eval_res = supabase.table("evaluations").select("derived_metrics_json").eq("applicant_id", applicant_db_id).order("evaluated_at", desc=True).limit(1).execute()
+                    if eval_res.data:
+                        derived_metrics_str = json.dumps(eval_res.data[0]["derived_metrics_json"])[:7500]
+
+        # Loop 3: Synthesize the final simulation narrative
+        loop3_system = (
+            "You are the Scenario Synthesis Agent. Explain what would happen under the proposed scenario. "
+            "Using the provided original derived_metrics_json and the proposed modifications, simulate and summarize the outcomes for both the best and worst cases. "
+            "Be clear and conversational. Explain how risk score, interest band, max eligibility, and the final decision might change compared to the original outcome. "
+            "Keep the response professional, targeted to a credit analyst. Max 2-3 paragraphs."
+        )
+        
+        loop3_user = json.dumps({
+            "original_decision": req.decision_context,
+            "original_derived_metrics_json_truncated": derived_metrics_str,
+            "user_question": req.question,
+            "best_case_modifications_applied": best_mods,
+            "worst_case_modifications_applied": worst_mods
+        }, default=str)
+        
+        response3 = client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[
+                {"role": "system", "content": loop3_system},
+                {"role": "user", "content": loop3_user}
+            ],
+            temperature=0.2
+        )
+        
+        narrative = response3.choices[0].message.content.strip()
+        return {
+            "status": "success",
+            "best_case_modifications": best_mods,
+            "worst_case_modifications": worst_mods,
+            "narrative": narrative
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok", "db_connected": supabase is not None}
 
 if __name__ == "__main__":
     import uvicorn
-    # Run with: python api.py
     uvicorn.run(app, host="0.0.0.0", port=8000)

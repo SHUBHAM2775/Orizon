@@ -1,0 +1,2 @@
+applicant_ref,age,employment_type,requested_amount,tenure_months,monthly_income,cibil_score,existing_emi,avg_bank_balance,bounce_count,assets_value,last_default,income_trend
+CSV-hard,35,Self-Employed,2000000,60,120000,480,15000,80000,2,1800000,Yes,UP

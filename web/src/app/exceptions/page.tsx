@@ -42,6 +42,7 @@ import {
   ActionableStepsCard,
   ToolResultsCard,
   XAINarrativeCard,
+  WhatIfSimulatorCard,
 } from "@/components/dashboard/eval-detail";
 import { cn } from "@/lib/utils";
 import type { Applicant, Evaluation, EvaluationRuleResult } from "@/lib/mock-data";
@@ -641,7 +642,10 @@ function ExceptionQueueContent() {
 
             {/* Actionable steps for context */}
             {selectedEval && (
-              <ActionableStepsCard steps={selectedEval.derivedMetrics?.actionable_steps || []} />
+              <>
+                <ActionableStepsCard steps={selectedEval.derivedMetrics?.actionable_steps || []} />
+                <WhatIfSimulatorCard evaluationId={selectedEval.id} />
+              </>
             )}
             {selectedEvalId && ruleResultsCache[selectedEvalId] === "loading" && (
               <IndexCard tabTone="default" as="div">
