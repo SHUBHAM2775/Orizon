@@ -268,6 +268,7 @@ class PipelineState(BaseModel):
   combined_adjustment: Optional[float] = None
   policy_result: Optional[PolicyResult] = None
   xai_narrative: Optional[str] = None
+  actionable_steps: List[str] = []
 
   # Budget
   api_budget: APIBudget = APIBudget()
@@ -314,6 +315,7 @@ class UnderwritingResult(BaseModel):
   tool_results: List[ToolResult] = []
   policy_result: PolicyResult
   xai_narrative: Optional[str] = None
+  actionable_steps: List[str] = []
   risk_grade: Optional[str] = None
   interest_rate_band: Optional[str] = None
   max_eligible_amount: Optional[float] = None

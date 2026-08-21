@@ -5,8 +5,9 @@ Single LLM call. Returns str only. Narrates the decision that has already been m
 Never reads a decision field back out of this — enforced by return type.
 """
 
+import json
 import os
-from typing import List
+from typing import List, Tuple
 
 from core.models import (
     APIBudget, MLScoringResult, NormalizedApplicantProfile,
@@ -20,10 +21,10 @@ def generate_xai_narrative(
     tool_results: List[ToolResult],
     policy_result: PolicyResult,
     api_budget: APIBudget,
-) -> str:
+) -> Tuple[str, List[str]]:
     """
-    Single Groq call that explains the finalized decision. Return type is str only.
-    The caller never reads a decision field back out of this.
+    Single Groq call that explains the finalized decision. 
+    Returns (narrative, actionable_steps).
     """
     context = _build_context(applicant, ml_result, tool_results, policy_result)
 
@@ -37,16 +38,18 @@ def generate_xai_narrative(
 
         client = Groq(api_key=api_key)
         response = client.chat.completions.create(
-            model="openai/gpt-oss-20b",
+            model="qwen/qwen3.6-27b", # Use a model that reliably supports JSON mode
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": context},
             ],
             temperature=0.0,
+            response_format={"type": "json_object"},
         )
-        narrative = response.choices[0].message.content.strip()
-        if narrative:
-            return narrative
+        content = response.choices[0].message.content.strip()
+        if content:
+            parsed = json.loads(content)
+            return parsed.get("narrative", ""), parsed.get("actionable_steps", [])
     except Exception as e:
         print(f"  [XAI] LLM call failed: {e}")
 
@@ -56,12 +59,16 @@ def generate_xai_narrative(
 _SYSTEM_PROMPT = """You are an Explainable AI (XAI) agent for a credit underwriting system.
 The decision has ALREADY been made. Your job is to EXPLAIN it — not to suggest a different decision.
 
-Write a VERY CONCISE summary (under 50 words). Include ONLY:
-1. What drove the score down or up (focus on the worst/most impactful factor).
-2. What the applicant can do to improve this (a general idea).
-3. A brief summary of the decision.
+You MUST respond in strict JSON format matching exactly this schema:
+{
+  "narrative": "A VERY CONCISE summary (under 50 words) of what drove the score up/down and a brief summary of the decision.",
+  "actionable_steps": [
+    "A clear, concise step the applicant can take to improve their chances (e.g., 'Reduce FOIR below 40%').",
+    "Another optional step."
+  ]
+}
 
-DO NOT include tables, greetings, or any other information. Just these 3 points in a short paragraph."""
+DO NOT include tables, greetings, or any other information outside the JSON object."""
 
 
 def _build_context(applicant, ml_result, tool_results, policy_result) -> str:
@@ -125,7 +132,7 @@ def _build_context(applicant, ml_result, tool_results, policy_result) -> str:
     return "\n".join(sections)
 
 
-def _fallback_narrative(ml_result, tool_results, policy_result) -> str:
+def _fallback_narrative(ml_result, tool_results, policy_result) -> Tuple[str, List[str]]:
     """Template-based narrative when LLM is unavailable or budget exhausted."""
     lines = [
         f"Decision: {policy_result.final_decision}",
@@ -164,4 +171,9 @@ def _fallback_narrative(ml_result, tool_results, policy_result) -> str:
     lines.append(f"\nMax Eligible Amount: {policy_result.max_eligible_amount}")
     lines.append(f"Escalation: {policy_result.escalation_authority or 'N/A'}")
 
-    return "\n".join(lines)
+    actionable_steps = [
+        "Ensure declared income reflects all verifiable sources to improve FOIR.",
+        "Maintain a stable average bank balance and clear past dues to improve bureau score."
+    ]
+
+    return "\n".join(lines), actionable_steps

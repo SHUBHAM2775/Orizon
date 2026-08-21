@@ -27,8 +27,8 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import {
   ApplicantProfileCard,
   EvalSummaryCard,
-  RuleBreakdownTable,
   XAINarrativeCard,
+  ActionableStepsCard,
   ToolResultsCard,
 } from "@/components/dashboard/eval-detail";
 import { cn } from "@/lib/utils";
@@ -492,9 +492,9 @@ function AnalystContent() {
             <IndexCard tabTone="default" as="div">
               <p className="text-xs text-[var(--reject)]">Failed to load rule breakdown: {rulesError}</p>
             </IndexCard>
-          ) : ruleResults ? (
-            <RuleBreakdownTable results={ruleResults} />
-          ) : null
+          ) : (
+            <ActionableStepsCard steps={latestRealEval.derived_metrics_json?.actionable_steps || []} />
+          )
         )}
         </div>
 

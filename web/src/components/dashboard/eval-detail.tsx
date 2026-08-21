@@ -152,6 +152,7 @@ export function EvalSummaryCard({ evaluation, applicant }: { evaluation: Evaluat
             </>
           )}
           <DetailRow label="Rules evaluated" value={String(evaluation.ruleResults.length)} />
+          <DetailRow label="Rules passed" value={String(evaluation.ruleResults.length - triggeredRules.length)} />
           <DetailRow label="Rules triggered" value={String(triggeredRules.length)} />
           
           {evaluation.derivedMetrics?.api_budget_summary && (
@@ -184,60 +185,24 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-// ─── RuleBreakdownTable ───────────────────────────────────────────────────────
 
-export function RuleBreakdownTable({ results }: { results: EvaluationRuleResult[] }) {
+// ─── ActionableStepsCard ─────────────────────────────────────────────────────────
+
+export function ActionableStepsCard({ steps }: { steps: string[] }) {
+  if (!steps || steps.length === 0) return null;
+  
   return (
     <IndexCard tabTone="default" as="div">
       <IndexCardHeader
-        title="Rule Breakdown"
-        meta={`${results.filter((r) => r.triggered).length} of ${results.length} rules triggered`}
+        title="Actionable Steps"
+        meta="How to improve chances"
       />
-      <div className="-mx-6 -mb-6 mt-4 border-t border-[color-mix(in_oklch,var(--ink),transparent_85%)] overflow-x-auto">
-        {/* Header */}
-        <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-4 px-6 py-2 bg-[color-mix(in_oklch,var(--paper),var(--ink)_3%)] border-b border-[color-mix(in_oklch,var(--ink),transparent_88%)]">
-          {["Rule", "Condition", "Actual", "Status"].map((h) => (
-            <span key={h} className="font-mono text-[10px] uppercase tracking-wider text-[var(--ink-muted)]">{h}</span>
+      <div className="mt-4 text-sm leading-relaxed text-[var(--ink)]">
+        <ul className="list-disc pl-5 space-y-2">
+          {steps.map((step, idx) => (
+            <li key={idx}>{step}</li>
           ))}
-        </div>
-        {/* Rows */}
-        {results.map((r) => (
-          <div
-            key={r.ruleId}
-            className={cn(
-              "grid grid-cols-[1fr_auto_auto_auto] gap-x-4 items-center px-6 py-2.5 border-b border-[color-mix(in_oklch,var(--ink),transparent_92%)] last:border-0",
-              r.triggered && "bg-[color-mix(in_oklch,var(--reject),transparent_96%)]",
-            )}
-          >
-            <div className="min-w-0 flex flex-col gap-1 items-start">
-              <p className="text-xs text-[var(--ink)] font-medium truncate">{r.ruleName}</p>
-              <div className="flex gap-2 items-center">
-                <span className={cn(
-                  "font-mono text-[9px] px-1.5 py-0.5 rounded-[2px] uppercase tracking-wider",
-                  r.outcome === "HARD_REJECT" 
-                    ? "bg-[color-mix(in_oklch,var(--reject),transparent_90%)] text-[var(--reject)]" 
-                    : "bg-[color-mix(in_oklch,var(--exception),transparent_90%)] text-[var(--exception-foreground,var(--exception))]"
-                )}>
-                  PENALTY: {r.outcome.replace("_", " ")}
-                </span>
-              </div>
-            </div>
-            <span className="font-mono text-xs text-[var(--ink-muted)] whitespace-nowrap">
-              {fmtOperator(r.operator, r.thresholdAtEvaluation)}
-            </span>
-            <span className="font-mono text-xs text-[var(--ink)] whitespace-nowrap">
-              {fmtActual(r.actualValue, "")}
-            </span>
-            <span
-              className={cn(
-                "font-mono text-[10px] uppercase tracking-wider whitespace-nowrap",
-                r.triggered ? "text-[var(--reject)]" : "text-[var(--approve)]",
-              )}
-            >
-              {r.triggered ? "TRIGGERED" : "PASS"}
-            </span>
-          </div>
-        ))}
+        </ul>
       </div>
     </IndexCard>
   );

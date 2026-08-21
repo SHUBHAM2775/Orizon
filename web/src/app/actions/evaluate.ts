@@ -46,6 +46,27 @@ export async function runEvaluationAction(applicantId: string, applicantRef: str
   }
 
   // Python API has already saved it to Supabase via persist_to_db
+
+  // Write audit log for analysts
+  const { data: { user } } = await supabase.auth.getUser();
+  if (user) {
+    const { data: userData } = await supabase
+      .from("users")
+      .select("id")
+      .eq("email", user.email!)
+      .single();
+
+    if (userData) {
+      await supabase.from("audit_logs").insert({
+        actor_id: userData.id,
+        action: "EVALUATION_RUN",
+        target_type: "applicant",
+        target_id: applicantId,
+        before_value: null,
+        after_value: { status: "evaluated", applicantRef }
+      });
+    }
+  }
   
   revalidatePath("/applications");
   return { success: true };

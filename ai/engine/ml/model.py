@@ -65,62 +65,78 @@ def run_policy_engine(
     combined_tool_adjustment: float,
 ) -> PolicyResult:
     """
-    Hard-reject gates → apply tool adjustment → FOIR retry → eligibility → decision.
-    Order is fixed and inviolable.
+    Apply ML tools → FOIR retry → Rules (Hard Reject, Eligibility, Scoring) → Decision.
     """
-    # 1. Hard-reject gates — always first, short-circuit everything
-    hard_reject_rules = _evaluate_hard_rejects(profile)
-    if hard_reject_rules:
-        return PolicyResult(
-            hard_reject_triggered=True,
-            triggered_rules=hard_reject_rules,
-            foir_adjustment=None,
-            final_decision="HARD_REJECT",
-            escalation_authority="SYSTEM_AUTO",
-            final_score=ml_result.risk_score,
-            combined_tool_adjustment=0.0,
-            risk_grade=_risk_grade_from_score(ml_result.risk_score),
-            interest_rate_band=_interest_band_from_score(ml_result.risk_score),
-            max_eligible_amount=0.0,
-            is_eligible_for_requested=False,
-        )
-
-    # 2. Apply combined tool adjustment to ML base score
+    # 1. Base Score & Tool Adjustments
     final_score = ml_result.risk_score * (1.0 + combined_tool_adjustment)
     final_score = round(max(0.0, min(100.0, final_score)), 2)
 
-    # 3. FOIR bounded retry loop
+    # 2. FOIR Bounded Retry (to see if lowering amount clears FOIR)
     foir_adj = _try_foir_adjustment(profile)
 
-    # 4. Eligibility rules (from default_policy.json)
-    eligibility_rules = _evaluate_eligibility(profile)
-    ineligible = any(r.outcome != "PASS" for r in eligibility_rules)
-
-    # 5. Score → decision mapping
-    if ineligible:
-        final_decision, escalation = "HARD_REJECT", "SYSTEM_AUTO"
+    # 3. Setup Data for Rules (inject calculated FOIR so rules can use it)
+    db_rules = _fetch_active_rules_from_db()
+    data_dict = profile.model_dump()
+    
+    # Calculate FOIR using existing obligations and declared income
+    if profile.declaredIncome and profile.declaredIncome > 0:
+        obligations = profile.existingObligations or 0.0
+        data_dict["foir_calculated"] = round(obligations / profile.declaredIncome, 4)
     else:
-        final_decision, escalation = _decision_from_score(profile, final_score)
+        data_dict["foir_calculated"] = 0.0
+        
+    data_dict["bureauScore"] = profile.bureauScore or 0
 
-    # 6. Sizing
-    if ineligible:
+    # 4. Evaluate ALL Rules
+    hard_reject_rules = _evaluate_rules_by_category("hard_reject", data_dict, db_rules)
+    eligibility_rules = _evaluate_rules_by_category("eligibility", data_dict, db_rules)
+    scoring_rules = _evaluate_rules_by_category("scoring", data_dict, db_rules)
+
+    all_rules = hard_reject_rules + eligibility_rules + scoring_rules
+
+    # Determine final outcome based on worst severity
+    triggered = [r for r in all_rules if r.outcome != "PASS"]
+    outcomes = [r.outcome for r in triggered]
+    
+    # Hierarchy of decisions
+    if "HARD_REJECT" in outcomes:
+        final_decision = "HARD_REJECT"
+        escalation = "SYSTEM_AUTO"
+    elif "INELIGIBLE" in outcomes:
+        final_decision = "HARD_REJECT" # Ineligible maps to Hard Reject functionally
+        escalation = "SYSTEM_AUTO"
+    elif "EXCEPTION_L2" in outcomes:
+        final_decision = "EXCEPTION_L2"
+        escalation = "VP_CREDIT"
+    elif "EXCEPTION_L1" in outcomes:
+        final_decision = "EXCEPTION_L1"
+        escalation = "CREDIT_MANAGER"
+    else:
+        # Fallback to score thresholds if no scoring rules exist/trigger
+        if not scoring_rules:
+            final_decision, escalation = _decision_from_score(profile, final_score)
+        else:
+            # If there are scoring rules and none triggered, it's APPROVED
+            final_decision = "APPROVED"
+            escalation = "SYSTEM_AUTO"
+
+    # 5. Determine Eligible Amount
+    if final_decision == "HARD_REJECT":
         max_eligible = 0.0
     else:
         max_eligible = _max_eligible_amount(profile)
         if foir_adj.cleared and foir_adj.final_amount is not None:
             max_eligible = min(max_eligible, foir_adj.final_amount)
-    requested = profile.requestedLoanAmount
 
-    all_rules = eligibility_rules + [
-        RuleEvaluation(
-            ruleId="ML-RISK-TIER", category="ML Score",
-            description="Calibrated model risk tier",
-            outcome=ml_result.risk_tier,
-            observedValue=final_score,
-            threshold="P1/P2/P3/P4",
-            reason=f"{ml_result.loan_type} model probability-weighted score",
-        ),
-    ]
+    all_rules.append(RuleEvaluation(
+        ruleId="ML-RISK-TIER", category="ML Score",
+        description="Calibrated model risk tier",
+        outcome=ml_result.risk_tier,
+        observedValue=final_score,
+        threshold="P1/P2/P3/P4",
+        reason=f"{ml_result.loan_type} model probability-weighted score",
+    ))
+
     if combined_tool_adjustment != 0.0:
         all_rules.append(RuleEvaluation(
             ruleId="TOOL-ADJUSTMENT", category="Tool Catalog",
@@ -132,7 +148,7 @@ def run_policy_engine(
         ))
 
     return PolicyResult(
-        hard_reject_triggered=False,
+        hard_reject_triggered=(final_decision == "HARD_REJECT"),
         triggered_rules=all_rules,
         foir_adjustment=foir_adj if foir_adj.triggered else None,
         final_decision=final_decision,
@@ -141,8 +157,8 @@ def run_policy_engine(
         combined_tool_adjustment=combined_tool_adjustment,
         risk_grade=_risk_grade_from_score(final_score),
         interest_rate_band=_interest_band_from_score(final_score),
-        max_eligible_amount=round(max_eligible, 2),
-        is_eligible_for_requested=(requested <= max_eligible if requested is not None else None),
+        max_eligible_amount=max_eligible,
+        is_eligible_for_requested=(max_eligible >= (profile.requestedLoanAmount or 0.0)) if max_eligible > 0 else False,
     )
 
 
@@ -183,56 +199,107 @@ def _try_foir_adjustment(
 # Hard-Reject & Eligibility Gates (from default_policy.json)
 # ---------------------------------------------------------------------------
 
+from supabase import create_client
+from dotenv import load_dotenv
+
+# Load env variables for Supabase
+env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "..", "web", ".env.local")
+load_dotenv(dotenv_path=env_path)
+
+SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+else:
+    supabase = None
+
 _POLICY_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "default_policy.json")
 
-def _load_policy(policy_path: str = _POLICY_PATH) -> Dict[str, Any]:
+def _load_fallback_policy() -> Dict[str, Any]:
     with open(_POLICY_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def _evaluate_hard_rejects(profile: NormalizedApplicantProfile) -> List[RuleEvaluation]:
-    policy = _load_policy()
-    triggered = []
-    data = profile.model_dump()
-    for gate in policy.get("hard_reject_gates", []):
-        field_val = data.get(gate["field"])
-        threshold = gate["threshold"]
-        op = gate["operator"]
-        fired = False
-        if op == "==" and field_val == threshold:
-            fired = True
-        elif op == "<" and field_val is not None and field_val < threshold:
-            fired = True
-        elif op == ">" and field_val is not None and field_val > threshold:
-            fired = True
-        if fired:
-            triggered.append(RuleEvaluation(
-                ruleId=gate["id"], category="Hard Reject",
-                description=gate["reason"], outcome="HARD_REJECT",
-                observedValue=field_val, threshold=threshold,
-                reason=gate["reason"],
-            ))
-    return triggered
+def _fetch_active_rules_from_db() -> List[Dict[str, Any]]:
+    if not supabase:
+        return []
+    try:
+        res = supabase.table("rules").select("*").eq("is_active", True).execute()
+        return res.data or []
+    except Exception as e:
+        print(f"Failed to fetch rules from DB: {e}")
+        return []
 
-def _evaluate_eligibility(profile: NormalizedApplicantProfile) -> List[RuleEvaluation]:
-    policy = _load_policy()
+def _evaluate_rule_condition(field_val: Any, op: str, threshold: float) -> bool:
+    if field_val is None:
+        return False
+    try:
+        val = float(field_val)
+        thresh = float(threshold)
+    except (ValueError, TypeError):
+        val = field_val
+        thresh = threshold
+
+    if op in ("EQ", "=="):
+        return val == thresh
+    elif op in ("LT", "<"):
+        return val < thresh
+    elif op in ("GT", ">"):
+        return val > thresh
+    elif op in ("LTE", "<="):
+        return val <= thresh
+    elif op in ("GTE", ">="):
+        return val >= thresh
+    return False
+
+def _evaluate_rules_by_category(
+    category: str, 
+    data: Dict[str, Any], 
+    db_rules: List[Dict[str, Any]]
+) -> List[RuleEvaluation]:
     results = []
-    data = profile.model_dump()
-    for gate in policy.get("eligibility_gates", []):
-        field_val = data.get(gate["field"])
-        threshold = gate["threshold"]
-        op = gate["operator"]
-        fired = False
-        if op == "<" and field_val is not None and field_val < threshold:
-            fired = True
-        elif op == ">" and field_val is not None and field_val > threshold:
-            fired = True
-        outcome = "INELIGIBLE" if fired else "PASS"
-        results.append(RuleEvaluation(
-            ruleId=gate["id"], category="Eligibility",
-            description=gate["reason"], outcome=outcome,
-            observedValue=field_val, threshold=threshold,
-            reason=gate["reason"] if fired else None,
-        ))
+
+    if db_rules:
+        # Use DB Rules
+        category_rules = [r for r in db_rules if r.get("category") == category]
+        for rule in category_rules:
+            field_val = data.get(rule["field_name"])
+            threshold = rule["threshold_value"]
+            op = rule["operator"]
+            
+            fired = _evaluate_rule_condition(field_val, op, threshold)
+            outcome = rule["outcome"] if fired else "PASS"
+            results.append(RuleEvaluation(
+                ruleId=rule["rule_code"], category=category.replace("_", " ").title(),
+                description=rule["description"], outcome=outcome,
+                observedValue=field_val, threshold=threshold,
+                reason=rule["description"] if fired else None
+            ))
+    else:
+        # Fallback to JSON
+        policy = _load_fallback_policy()
+        json_key = f"{category}_gates"
+        for gate in policy.get(json_key, []):
+            field_val = data.get(gate["field"])
+            threshold = gate["threshold"]
+            op = gate["operator"]
+            fired = _evaluate_rule_condition(field_val, op, threshold)
+            
+            # Map fallback JSON outcomes
+            if category == "hard_reject":
+                outcome = "HARD_REJECT" if fired else "PASS"
+            elif category == "eligibility":
+                outcome = "INELIGIBLE" if fired else "PASS"
+            else:
+                outcome = "FLAG" if fired else "PASS"
+
+            results.append(RuleEvaluation(
+                ruleId=gate["id"], category=category.replace("_", " ").title(),
+                description=gate["reason"], outcome=outcome,
+                observedValue=field_val, threshold=threshold,
+                reason=gate["reason"] if fired else None
+            ))
+                
     return results
 
 

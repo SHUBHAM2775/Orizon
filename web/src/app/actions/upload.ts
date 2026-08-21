@@ -59,7 +59,7 @@ export async function processStructuredFileAction(formData: FormData) {
         tenure_months: profile.requestedTenure,
         monthly_income: profile.declaredIncome,
         cibil_score: profile.bureauScore,
-        existing_emi: profile.emiDebits,
+        existing_emi: profile.existingObligations ?? profile.emiDebits,
         avg_bank_balance: profile.bankAvgBalance ?? profile.bankAvgCredits,
         bounce_count: profile.bounceCount,
         last_default: profile.writeOffFlag || profile.defaultFlag,
@@ -185,6 +185,18 @@ export async function submitApplicantAction(applicantData: Record<string, any>) 
         return { error: "An applicant with this reference ID already exists." };
       }
       return { error: error.message };
+    }
+
+    // Write audit log for analysts
+    if (userData) {
+      await supabase.from("audit_logs").insert({
+        actor_id: userData.id,
+        action: "APPLICATION_SUBMITTED",
+        target_type: "applicant",
+        target_id: data.id,
+        before_value: null,
+        after_value: { applicantRef: applicantData.applicant_ref }
+      });
     }
 
     return { success: true, applicant: data };

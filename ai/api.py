@@ -119,11 +119,15 @@ def persist_to_db(profile_data: dict, decision_data: dict):
                 rule_code = r.get("ruleId")
                 rule_db_id = rule_map.get(rule_code)
                 if rule_db_id:
+                    val = r.get("observedValue")
+                    if isinstance(val, bool):
+                        val = 1.0 if val else 0.0
+
                     results_to_insert.append({
                         "evaluation_id": eval_db_id,
                         "rule_id": rule_db_id,
                         "result": "TRIGGERED" if r.get("outcome") != "PASS" else "PASS",
-                        "actual_value": r.get("observedValue"),
+                        "actual_value": val,
                         "threshold_at_evaluation": r.get("threshold") or 0
                     })
             if results_to_insert:

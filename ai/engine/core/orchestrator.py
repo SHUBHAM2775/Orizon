@@ -140,7 +140,7 @@ def run_underwriting(applicant: NormalizedApplicantProfile) -> UnderwritingResul
         # Stage 5 — XAI Narrative (1 API call max)
         state.advance_to(PipelineStage.XAI_NARRATIVE)
         from .xai import generate_xai_narrative
-        state.xai_narrative = generate_xai_narrative(
+        state.xai_narrative, state.actionable_steps = generate_xai_narrative(
             applicant, state.ml_result, state.tool_results, state.policy_result, state.api_budget,
         )
         audit.log_stage("xai_narrative", {"generated": state.xai_narrative is not None})
@@ -180,6 +180,7 @@ def _assemble_result(state: PipelineState) -> UnderwritingResult:
         tool_results=state.tool_results or [],
         policy_result=policy,
         xai_narrative=state.xai_narrative,
+        actionable_steps=state.actionable_steps,
         risk_grade=policy.risk_grade,
         interest_rate_band=policy.interest_rate_band,
         max_eligible_amount=policy.max_eligible_amount,
@@ -257,8 +258,9 @@ def to_decision_report(result: UnderwritingResult, applicant: NormalizedApplican
             "tool_adjustments": {t.tool_id: t.adjustment_applied for t in result.tool_results if t.ran},
             "combined_adjustment": result.policy_result.combined_tool_adjustment,
             "api_budget": result.api_budget_summary,
+            "actionable_steps": result.actionable_steps,
         },
         audit_trail=result.audit_trail,
         xaiMemo=result.xai_narrative,
-        actionableSteps=[],
+        actionableSteps=result.actionable_steps or [],
     )

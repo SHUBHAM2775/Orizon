@@ -1,0 +1,2 @@
+applicant_ref,age,employment_type,requested_amount,tenure_months,monthly_income,cibil_score,existing_emi,avg_bank_balance,bounce_count,assets_value,last_default,income_trend
+CSV-9001,28,Salaried,1500000,60,85000,740,12000,32000,0,1500000,No,UP

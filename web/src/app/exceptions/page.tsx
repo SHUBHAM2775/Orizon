@@ -39,7 +39,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import {
   ApplicantProfileCard,
   EvalSummaryCard,
-  RuleBreakdownTable,
+  ActionableStepsCard,
 } from "@/components/dashboard/eval-detail";
 import { cn } from "@/lib/utils";
 import type { Applicant, Evaluation, EvaluationRuleResult } from "@/lib/mock-data";
@@ -666,9 +666,9 @@ function ExceptionQueueContent() {
               </IndexCard>
             )}
 
-            {/* Rule breakdown for context */}
-            {selectedRuleResults && selectedEval && (
-              <RuleBreakdownTable results={selectedRuleResults} />
+            {/* Actionable steps for context */}
+            {selectedEval && (
+              <ActionableStepsCard steps={selectedEval.derivedMetrics?.actionable_steps || []} />
             )}
             {selectedEvalId && ruleResultsCache[selectedEvalId] === "loading" && (
               <IndexCard tabTone="default" as="div">
