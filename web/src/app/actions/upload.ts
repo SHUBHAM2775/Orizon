@@ -57,7 +57,7 @@ export async function processStructuredFileAction(formData: FormData) {
         employment_type: profile.employmentType,
         requested_amount: profile.requestedLoanAmount,
         tenure_months: profile.requestedTenure,
-        monthly_income: profile.declaredIncome ? profile.declaredIncome / 12 : undefined,
+        monthly_income: profile.declaredIncome,
         cibil_score: profile.bureauScore,
         existing_emi: profile.emiDebits,
         avg_bank_balance: profile.bankAvgBalance ?? profile.bankAvgCredits,
