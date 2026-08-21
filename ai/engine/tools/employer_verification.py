@@ -105,7 +105,8 @@ def _synthesize_findings(employer_name, applicant, snippets, sources, api_budget
                     {"role": "system", "content": (
                         "You are verifying an employer/business entity. "
                         "Return ONLY JSON: {entity_found: bool, registration_date: str|null, "
-                        "vintage_from_registry: int|null, confidence: low|medium|high}. "
+                        "vintage_from_registry: int|null, confidence: low|medium|high, qualitative_analysis: str}. "
+                        "In 'qualitative_analysis', write a comprehensive 2-3 sentence paragraph detailing the digital footprint, registration validity, and operational status of the entity based on the search snippets. "
                         "Use only the provided search snippets."
                     )},
                     {"role": "user", "content": json.dumps({
@@ -134,20 +135,20 @@ def _build_result(raw, applicant, llm_used=False):
     reasons = []
     adjustment = 0.0
 
-    if not entity_found:
-        adjustment = -0.08
-        reasons.append(f"Entity not found in search results.")
-    elif reg_vintage is not None and declared_vintage is not None:
-        gap = abs(declared_vintage - reg_vintage)
-        if gap > 3:
-            adjustment = -0.06
-            reasons.append(f"Vintage inconsistency: declared {declared_vintage}y, registry shows ~{reg_vintage}y (gap {gap}y).")
-        else:
-            adjustment = 0.04
-            reasons.append(f"Entity found, vintage consistent (declared {declared_vintage}y, registry ~{reg_vintage}y).")
-    elif entity_found:
-        adjustment = 0.02
-        reasons.append("Entity found in search results but vintage could not be verified.")
+    analysis = raw.get("qualitative_analysis")
+    if analysis:
+        reasons.append(analysis)
+    else:
+        if not entity_found:
+            reasons.append("Entity could not be verified in public registries or online records, posing a high risk.")
+        elif reg_vintage is not None and declared_vintage is not None:
+            gap = abs(declared_vintage - reg_vintage)
+            if gap > 3:
+                reasons.append(f"Entity exists, but vintage is highly inconsistent (declared {declared_vintage}y vs registry ~{reg_vintage}y).")
+            else:
+                reasons.append(f"Entity successfully verified. Vintage is consistent with declared {declared_vintage}y.")
+        elif entity_found:
+            reasons.append("Entity found in search results, confirming basic operational footprint, though exact vintage could not be verified.")
 
     return {
         "entity_found": entity_found,
@@ -163,10 +164,15 @@ def _build_result(raw, applicant, llm_used=False):
 def _heuristic_result(employer_name, snippets, applicant):
     text = " ".join(snippets).lower()
     found = employer_name.lower() in text
+    if found:
+        reasons = ["Heuristic analysis verified the employer's name in online records, indicating a baseline operational footprint, though full registry details were not synthesized."]
+    else:
+        reasons = ["Heuristic analysis failed to find the employer's name in standard public records, highlighting a significant verification gap that requires manual investigation."]
+
     return {
         "entity_found": found,
         "adjustment": 0.02 if found else -0.05,
-        "reasons": [f"Heuristic: {'name found' if found else 'name not found'} in search results."],
+        "reasons": reasons,
         "confidence": "low",
         "llm_used": False,
         "vintage_from_registry": None,

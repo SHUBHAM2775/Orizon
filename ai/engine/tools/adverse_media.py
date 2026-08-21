@@ -105,7 +105,9 @@ def _synthesize(entity_name, snippets, sources, api_budget):
                     {"role": "system", "content": (
                         "You are screening a business entity for adverse media and litigation. "
                         "Return ONLY JSON: {adverse_found: bool, severity: minor|moderate|severe|none, "
-                        "key_findings: [{claim: str, source: str}], confidence: low|medium|high}. "
+                        "key_findings: [{claim: str, source: str}], confidence: low|medium|high, "
+                        "qualitative_analysis: str}. "
+                        "In 'qualitative_analysis', write a comprehensive 2-3 sentence paragraph assessing the media and regulatory risk profile of this entity based on the snippets. Be highly detailed. "
                         "Use only the provided search snippets. Be conservative — only flag "
                         "clear evidence of fraud, regulatory action, or litigation."
                     )},
@@ -133,10 +135,14 @@ def _build_result(raw):
     severity_map = {"none": 0.0, "minor": -0.03, "moderate": -0.07, "severe": -0.10}
     adjustment = severity_map.get(severity, 0.0)
 
-    findings = raw.get("key_findings", [])
-    reasons = [f"{f.get('claim', 'Unknown finding')}" for f in findings[:3]]
-    if not adverse_found:
-        reasons = ["No adverse media or litigation found for the business entity."]
+    analysis = raw.get("qualitative_analysis")
+    if analysis:
+        reasons = [analysis]
+    else:
+        findings = raw.get("key_findings", [])
+        reasons = [f"{f.get('claim', 'Unknown finding')}" for f in findings[:3]]
+        if not adverse_found:
+            reasons = ["No adverse media or litigation found for the business entity. Public records and news screening show a clean profile with no major regulatory or legal headwinds."]
 
     return {
         "adverse_found": adverse_found,
@@ -155,15 +161,15 @@ def _heuristic(entity_name, snippets):
 
     if hits == 0:
         return {"adverse_found": False, "severity": "none", "adjustment": 0.0,
-                "reasons": ["Heuristic: no adverse signals found in search results."],
+                "reasons": ["Heuristic analysis of search results indicates a clean profile. No adverse keywords or litigation signals were detected across the queried public records, suggesting low regulatory and legal risk."],
                 "confidence": "low", "llm_used": False}
     elif hits <= 3:
         return {"adverse_found": True, "severity": "minor", "adjustment": -0.03,
-                "reasons": [f"Heuristic: {hits} adverse keyword(s) found in search results."],
+                "reasons": [f"Heuristic analysis detected {hits} adverse keyword(s) in the search results. While this constitutes a minor signal, it suggests a need for routine due diligence to rule out any peripheral legal issues."],
                 "confidence": "low", "llm_used": False}
     else:
         return {"adverse_found": True, "severity": "moderate", "adjustment": -0.07,
-                "reasons": [f"Heuristic: {hits} adverse keywords found — elevated concern."],
+                "reasons": [f"Heuristic analysis detected {hits} adverse keywords, indicating elevated concern. This high density of negative signals suggests significant regulatory or litigation exposure that requires immediate manual review."],
                 "confidence": "low", "llm_used": False}
 
 

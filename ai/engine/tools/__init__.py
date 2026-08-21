@@ -11,20 +11,19 @@ from core.models import APIBudget, MLScoringResult, NormalizedApplicantProfile, 
 from engine.config.ml_config import ADVERSE_MEDIA_AMOUNT_THRESHOLD, COMBINED_CAP, TOOL_CAPS
 
 
+import json
+import os
+
 def run_tool_catalog(
     applicant: NormalizedApplicantProfile,
     ml_result: MLScoringResult,
     api_budget: APIBudget,
 ) -> List[ToolResult]:
     """
-    Deterministic routing table. Every tool either runs or is skipped with a reason.
-    Always returns exactly 6 entries.
+    Agentic tool orchestrator loop. The LLM decides which tools to run based on the
+    applicant profile and prior tool results, for a maximum of 3 loops.
+    Always returns exactly 6 entries to maintain downstream pipeline contracts.
     """
-    is_business = ml_result.loan_type == "business"
-    has_collateral = bool(applicant.declaredAssets and applicant.declaredAssets > 0)
-    is_large_business = is_business and (applicant.requestedLoanAmount or 0) > ADVERSE_MEDIA_AMOUNT_THRESHOLD
-    has_financials = is_business and bool(applicant.declaredIncome)
-
     # Lazy imports to keep module loading fast
     from .market_analysis import run_market_tool
     from .employer_verification import run_employer_tool
@@ -33,32 +32,104 @@ def run_tool_catalog(
     from .macro_outlook import run_macro_tool
     from .peer_benchmarking import run_peer_tool
 
-    routing = [
-        ("market_analysis",       is_business,       "personal loan",               lambda: run_market_tool(applicant, ml_result, api_budget)),
-        ("employer_verification", True,              None,                          lambda: run_employer_tool(applicant, api_budget)),
-        ("collateral_valuation",  has_collateral,    "no collateral declared",      lambda: run_collateral_tool(applicant, api_budget)),
-        ("adverse_media",         is_large_business, "personal/below threshold",    lambda: run_adverse_media_tool(applicant, api_budget)),
-        ("macro_outlook",         is_business,       "personal loan",               lambda: run_macro_tool(applicant, api_budget)),
-        ("peer_benchmarking",     has_financials,    "no income declared/personal", lambda: run_peer_tool(applicant, api_budget)),
-    ]
+    # All available tools mapping
+    tool_map = {
+        "market_analysis": lambda: run_market_tool(applicant, ml_result, api_budget),
+        "employer_verification": lambda: run_employer_tool(applicant, api_budget),
+        "collateral_valuation": lambda: run_collateral_tool(applicant, api_budget),
+        "adverse_media": lambda: run_adverse_media_tool(applicant, api_budget),
+        "macro_outlook": lambda: run_macro_tool(applicant, api_budget),
+        "peer_benchmarking": lambda: run_peer_tool(applicant, api_budget),
+    }
 
-    results: List[ToolResult] = []
-    for tool_id, condition, skip_reason, fn in routing:
-        if not condition:
-            results.append(ToolResult(
-                tool_id=tool_id, ran=False, skip_reason=skip_reason or "condition not met",
-            ))
+    results_map = {}
+    
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        print("  [Orchestrator] No API key found, skipping all tools.")
+        return [ToolResult(tool_id=t, ran=False, skip_reason="Agentic Orchestrator disabled (no API key)") for t in tool_map]
+
+    from groq import Groq
+    client = Groq(api_key=api_key)
+
+    applicant_summary = applicant.model_dump(exclude_none=True)
+    
+    for loop_num in range(3):
+        if not api_budget.can_call("groq_llm", "orchestrator"):
+            print("  [Orchestrator] Budget exhausted, terminating loop.")
+            break
+            
+        print(f"  [Orchestrator] Loop {loop_num+1} starting...")
+        
+        # Build state context
+        state_context = {
+            "applicant": applicant_summary,
+            "ml_risk_tier": ml_result.risk_tier,
+            "available_uncalled_tools": [t for t in tool_map.keys() if t not in results_map],
+            "previously_called_tools_and_results": [
+                {"tool": k, "adjustment": v.adjustment_applied, "reasons": v.key_reasons}
+                for k, v in results_map.items()
+            ]
+        }
+        
+        system_prompt = (
+            "You are the Orchestrator Agent. You decide which data-gathering tools to run to assess credit risk. "
+            "Examine the 'applicant' data and any 'previously_called_tools_and_results'. "
+            "If you need more information, return a JSON object with a list of tools to run: {\"tools_to_run\": [\"tool_name\"]}. "
+            "If you have enough information to make a solid assessment, or if there are no 'available_uncalled_tools' left, return {\"done\": true}. "
+            "Important Rules:\n"
+            "- Do not call collateral_valuation if the applicant has no declared assets.\n"
+            "- Do not call business-only tools (market_analysis, adverse_media, macro_outlook, peer_benchmarking) for personal loans.\n"
+            "- Only select tools from the 'available_uncalled_tools' list.\n"
+        )
+        
+        try:
+            api_budget.consume("groq_llm", "orchestrator", endpoint="groq/chat")
+            response = client.chat.completions.create(
+                model="openai/gpt-oss-20b",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": json.dumps(state_context)}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0,
+            )
+            raw = json.loads(response.choices[0].message.content)
+            
+            if raw.get("done"):
+                print("  [Orchestrator] Decided it has enough information. Exiting loop.")
+                break
+                
+            tools_to_run = raw.get("tools_to_run", [])
+            if not tools_to_run:
+                break
+                
+            print(f"  [Orchestrator] Decided to run: {tools_to_run}")
+            for tool in tools_to_run:
+                if tool in tool_map and tool not in results_map:
+                    try:
+                        results_map[tool] = tool_map[tool]()
+                    except Exception as e:
+                        results_map[tool] = ToolResult(
+                            tool_id=tool, ran=True, adjustment_applied=0.0,
+                            needs_manual_review=True, key_reasons=[f"Tool failed: {str(e)}"], confidence="low"
+                        )
+                        
+        except Exception as e:
+            print(f"  [Orchestrator] Loop failed: {e}")
+            break
+
+    # Build final list of 6 ToolResults to maintain contract
+    final_results = []
+    for tool_id in tool_map.keys():
+        if tool_id in results_map:
+            final_results.append(results_map[tool_id])
         else:
-            try:
-                results.append(fn())
-            except Exception as e:
-                results.append(ToolResult(
-                    tool_id=tool_id, ran=True, adjustment_applied=0.0,
-                    needs_manual_review=True,
-                    key_reasons=[f"Tool failed: {str(e)}"],
-                    confidence="low",
-                ))
-    return results
+            final_results.append(ToolResult(
+                tool_id=tool_id, ran=False, skip_reason="Agentic Orchestrator skipped this tool"
+            ))
+            
+    return final_results
 
 
 def aggregate_adjustments(tool_results: List[ToolResult]) -> float:

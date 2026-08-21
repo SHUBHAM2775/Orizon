@@ -54,39 +54,37 @@ def run_peer_tool(
 
     z = (income - median) / std if std > 0 else 0.0
 
-    reasons = []
+    analysis_parts = []
     if z < -2:
         adjustment = -0.08
-        reasons.append(
-            f"Declared income ₹{income:,.0f} is far below sector median ₹{median:,.0f} "
-            f"(z-score: {z:.2f}). Significantly below peers."
+        analysis_parts.append(
+            f"The applicant's declared income of ₹{income:,.0f} falls drastically below the '{sector}' sector median of ₹{median:,.0f} (z-score: {z:.2f}). This indicates severe financial underperformance relative to industry peers, escalating credit risk."
         )
     elif z < -1:
         adjustment = -0.03
-        reasons.append(
-            f"Declared income ₹{income:,.0f} is below sector median ₹{median:,.0f} "
-            f"(z-score: {z:.2f}). Moderately below peers."
+        analysis_parts.append(
+            f"The applicant's declared income of ₹{income:,.0f} is moderately below the '{sector}' sector median of ₹{median:,.0f} (z-score: {z:.2f}). This suggests slight financial underperformance relative to peers."
         )
     elif z < 1:
         adjustment = 0.0
-        reasons.append(
-            f"Declared income ₹{income:,.0f} is within typical range for sector "
-            f"(median ₹{median:,.0f}, z-score: {z:.2f})."
+        analysis_parts.append(
+            f"The applicant's declared income of ₹{income:,.0f} aligns with the typical financial range for the '{sector}' sector (median ₹{median:,.0f}, z-score: {z:.2f}). This indicates stable and expected financial health."
         )
     else:
         adjustment = 0.04
-        reasons.append(
-            f"Declared income ₹{income:,.0f} is above sector median ₹{median:,.0f} "
-            f"(z-score: {z:.2f}). Stronger than typical peers."
+        analysis_parts.append(
+            f"The applicant's declared income of ₹{income:,.0f} significantly exceeds the '{sector}' sector median of ₹{median:,.0f} (z-score: {z:.2f}). This demonstrates robust financial strength and market positioning, effectively mitigating credit risk."
         )
 
     # Vintage comparison if available
     if applicant.businessVintage and baseline.get("median_vintage"):
         vintage_z = (applicant.businessVintage - baseline["median_vintage"]) / max(baseline["median_vintage"] * 0.5, 1)
         if vintage_z < -1:
-            reasons.append(f"Business vintage ({applicant.businessVintage}y) is below sector median ({baseline['median_vintage']}y).")
+            analysis_parts.append(f"However, the business vintage ({applicant.businessVintage}y) lags behind the sector median ({baseline['median_vintage']}y), suggesting potential operational immaturity.")
         elif vintage_z > 1:
-            reasons.append(f"Business vintage ({applicant.businessVintage}y) is above sector median ({baseline['median_vintage']}y) — established entity.")
+            analysis_parts.append(f"Furthermore, the business vintage ({applicant.businessVintage}y) outpaces the sector median ({baseline['median_vintage']}y), confirming it as an established and stable entity.")
+
+    reasons = [" ".join(analysis_parts)]
 
     return ToolResult(
         tool_id="peer_benchmarking",

@@ -1,0 +1,2 @@
+applicantId,name,businessName,employmentType,industry,businessSector,businessVintage,requestedLoanAmount,requestedTenure,declaredIncome,existingObligations,bureauScore,activeLoans,enquiries,overdueAmount,dpdHistory,writeOffFlag,settlementFlag,defaultFlag,bankAvgCredits,monthlyCredits,bankAvgBalance,emiDebits,bounceCount
+BUSINESS-001,Global Trade Enterprises,Global Trade Enterprises,Self-Employed,Manufacturing,B2B Hardware,8,8000000,60,12000000,50000,750,1,2,0,"[0,0,0,0,0,0]",false,false,false,1500000,1500000,800000,50000,0

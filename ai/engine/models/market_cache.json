@@ -1,0 +1,18 @@
+{
+  "manufacturing": {
+    "cached_at": 1787280648.8814347,
+    "analysis": {
+      "applies_to": "business_only",
+      "sector_outlook": "not_run",
+      "key_reasons": [],
+      "sources": [
+        "https://duckduckgo.com/html/?q=Manufacturing+industry+outlook+India+2026",
+        "https://duckduckgo.com/html/?q=Manufacturing+MSME+credit+risk+default+rate+India"
+      ],
+      "adjustment_applied": 0.0,
+      "confidence": "low",
+      "base_score": 100.0,
+      "final_score": 100.0
+    }
+  }
+}

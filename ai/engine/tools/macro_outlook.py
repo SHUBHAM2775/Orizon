@@ -80,7 +80,9 @@ def _synthesize(snippets, sources, api_budget):
                         "You are analyzing the macro lending environment in India. "
                         "Return ONLY JSON: {outlook: tightening|neutral|easing, "
                         "key_reasons: [str], adjustment: number between -0.05 and 0.05, "
-                        "confidence: low|medium|high}. Use only the provided snippets."
+                        "confidence: low|medium|high, qualitative_analysis: str}. "
+                        "In 'qualitative_analysis', write a comprehensive 2-3 sentence paragraph assessing the macroeconomic and regulatory factors (e.g. RBI rate cycles, MSME lending policies) and their direct impact on the applicant's credit risk profile. "
+                        "Use only the provided snippets."
                     )},
                     {"role": "user", "content": json.dumps({
                         "snippets": snippets[:2],
@@ -92,10 +94,12 @@ def _synthesize(snippets, sources, api_budget):
             )
             raw = json.loads(response.choices[0].message.content)
             adjustment = max(-0.05, min(0.05, float(raw.get("adjustment", 0.0))))
+            analysis = raw.get("qualitative_analysis")
+            reasons = [analysis] if analysis else list(raw.get("key_reasons", []))[:3]
             return {
                 "outlook": raw.get("outlook", "neutral"),
                 "adjustment": adjustment,
-                "reasons": list(raw.get("key_reasons", []))[:3],
+                "reasons": reasons,
                 "confidence": raw.get("confidence", "low"),
                 "llm_used": True,
             }
@@ -111,11 +115,11 @@ def _heuristic(snippets):
     ease = sum(text.count(t) for t in ["easing", "cut", "reduce rate", "support", "stimulus"])
 
     if tighten > ease + 2:
-        return {"outlook": "tightening", "adjustment": -0.03, "reasons": ["Heuristic: tightening signals found."], "confidence": "low", "llm_used": False}
+        return {"outlook": "tightening", "adjustment": -0.03, "reasons": ["Heuristic analysis detected a high concentration of macroeconomic tightening signals (e.g., rate hikes, restricted liquidity), pointing to an unfavorable credit lending environment."], "confidence": "low", "llm_used": False}
     elif ease > tighten + 2:
-        return {"outlook": "easing", "adjustment": 0.02, "reasons": ["Heuristic: easing signals found."], "confidence": "low", "llm_used": False}
+        return {"outlook": "easing", "adjustment": 0.02, "reasons": ["Heuristic analysis detected significant macroeconomic easing signals (e.g., rate cuts, stimulus), pointing to a highly supportive credit lending environment."], "confidence": "low", "llm_used": False}
     else:
-        return {"outlook": "neutral", "adjustment": 0.0, "reasons": ["Heuristic: macro environment appears neutral."], "confidence": "low", "llm_used": False}
+        return {"outlook": "neutral", "adjustment": 0.0, "reasons": ["Heuristic analysis indicates a neutral macroeconomic environment. Signals regarding RBI rate cycles and MSME lending policies do not show any significant tightening or easing trends."], "confidence": "low", "llm_used": False}
 
 
 def _compact(html: str) -> str:

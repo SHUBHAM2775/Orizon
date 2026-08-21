@@ -1,0 +1,23 @@
+{
+  "applicantId": "BUSINESS-001",
+  "name": "Global Trade Enterprises",
+  "businessName": "Global Trade Enterprises",
+  "employmentType": "Self-Employed",
+  "industry": "Manufacturing",
+  "businessSector": "B2B Hardware",
+  "businessVintage": 8,
+  "requestedLoanAmount": 8000000,
+  "requestedTenure": 60,
+  "declaredIncome": 12000000,
+  "bureauScore": 750,
+  "activeLoans": 1,
+  "hasWriteOff": false,
+  "dpdHistory": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ]
+}

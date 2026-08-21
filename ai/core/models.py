@@ -174,9 +174,9 @@ class PolicyResult(BaseModel):
 
 class APIBudget(BaseModel):
   """Tracks all external API calls (LLM + web search) for a single pipeline run."""
-  max_groq_calls: int = 4
+  max_groq_calls: int = 7
   max_web_searches: int = 12
-  max_total_api_calls: int = 15
+  max_total_api_calls: int = 20
 
   tool_search_caps: Dict[str, int] = {
     "market_analysis": 2,
@@ -192,6 +192,7 @@ class APIBudget(BaseModel):
     "adverse_media": 1,
     "macro_outlook": 1,
     "xai_narrative": 1,
+    "orchestrator": 3,
   }
 
   groq_calls_used: int = 0

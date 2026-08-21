@@ -71,7 +71,7 @@ def _synthesize_market_analysis(sector: str, snippets: List[str], sources: List[
         response = client.chat.completions.create(
             model="openai/gpt-oss-20b",
             messages=[
-                {"role": "system", "content": "Return only JSON: sector_outlook positive|neutral|negative|not_run, key_reasons array, adjustment_applied number -0.15..0.05, confidence low|medium|high. Use only provided snippets."},
+                {"role": "system", "content": "Return only JSON: {sector_outlook: 'positive'|'neutral'|'negative'|'not_run', key_reasons: [str], adjustment_applied: float (-0.15..0.05), confidence: 'low'|'medium'|'high', qualitative_analysis: str}. In 'qualitative_analysis', write a comprehensive 2-3 sentence paragraph assessing the sector's health and its impact on credit risk based on the provided snippets. Use only provided snippets."},
                 {"role": "user", "content": json.dumps({"sector": sector, "base_tier": base_tier, "snippets": snippets, "sources": sources})},
             ],
             response_format={"type": "json_object"},
@@ -79,9 +79,11 @@ def _synthesize_market_analysis(sector: str, snippets: List[str], sources: List[
         )
         raw = json.loads(response.choices[0].message.content)
         adjustment = max(-MAX_ADJUSTMENT, min(0.05, float(raw.get("adjustment_applied", 0.0))))
+        analysis = raw.get("qualitative_analysis")
+        reasons = [analysis] if analysis else list(raw.get("key_reasons", []))[:5]
         return MarketAnalysis(
             sector_outlook=raw.get("sector_outlook", "neutral"),
-            key_reasons=list(raw.get("key_reasons", []))[:5],
+            key_reasons=reasons,
             sources=sources,
             adjustment_applied=adjustment,
             confidence=raw.get("confidence", "low"),
@@ -95,15 +97,19 @@ def _heuristic_market_analysis(sector: str, snippets: List[str], sources: List[s
     pos = sum(text.count(t) for t in ["growth", "positive", "robust", "strong", "improve", "demand"])
     if not sources:
         outlook, adjustment = "not_run", 0.0
+        reason = f"Sector evaluated: {sector}. Heuristic analysis bypassed due to lack of sources."
     elif neg > pos + 2:
         outlook, adjustment = "negative", -0.08
+        reason = f"Heuristic analysis for the {sector} sector detected a high frequency of negative indicators (e.g. default, stress, slowdown), suggesting a challenging market environment with elevated credit risk."
     elif pos > neg + 2:
         outlook, adjustment = "positive", 0.03
+        reason = f"Heuristic analysis for the {sector} sector detected strong positive momentum (e.g. growth, robust demand), indicating a favorable market environment that marginally lowers credit risk."
     else:
         outlook, adjustment = "neutral", 0.0
+        reason = f"Heuristic analysis for the {sector} sector found balanced or neutral signals, suggesting a stable but unexceptional market environment."
     return MarketAnalysis(
         sector_outlook=outlook,
-        key_reasons=[f"Sector evaluated: {sector}.", "Fallback heuristic used when structured market synthesis was unavailable."],
+        key_reasons=[reason],
         sources=sources,
         adjustment_applied=adjustment,
         confidence="low" if not sources else "medium",
