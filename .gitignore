@@ -1,0 +1,29 @@
+# Project documentation / internal docs
+/docs/
+docs/
+
+# Environment files
+.env
+.env.local
+.env.*
+*.env
+
+# Dependencies
+node_modules/
+.venv/
+venv/
+
+# Build and caches
+.next/
+out/
+build/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# System / IDE
+.DS_Store
+*.pem
+.idea/
+.vscode/
