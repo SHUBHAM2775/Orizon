@@ -11,20 +11,21 @@ FIELD_ALIASES = {
   "bureauScore": ["credit_score", "credit_rating", "cibil", "cibil_score", "bureau_score"],
   "businessVintage": ["employment_years", "years_employed", "job_tenure", "employment_tenure", "business_vintage"],
   "requestedLoanAmount": ["loan_amount", "requested_amount", "amount_requested", "requested_loan_amount"],
-  "requestedTenure": ["tenure", "requested_tenure", "loan_tenure", "months"],
+  "requestedTenure": ["tenure", "requested_tenure", "loan_tenure", "months", "tenure_months", "tenuremonths"],
   "age": ["age", "applicant_age"],
   "employmentType": ["employment_type", "job_type"],
-  "writeOffFlag": ["write_off_flag", "write_off", "is_written_off"],
+  "writeOffFlag": ["write_off_flag", "write_off", "is_written_off", "has_write_off", "haswriteoff", "last_default", "lastdefault"],
   "settlementFlag": ["settlement_flag", "is_settled"],
   "defaultFlag": ["default_flag", "is_defaulted", "default_indicator"],
-  "bounceCount": ["bounce_count", "bounces", "cheque_bounces"],
+  "bankAvgBalance": ["avg_bank_balance", "bank_avg_balance", "average_bank_balance", "avgbalance"],
+  "bounceCount": ["bounce_count", "bounces", "cheque_bounces", "bouncecount"],
   "monthlyCredits": ["monthly_credits", "total_credits"],
   "emiDebits": ["emi_debits", "monthly_emis", "bank_emi_debits"],
   "largeObligationsCount": ["large_obligations", "large_obligations_count", "high_value_debits"],
   "incomeTrend": ["income_trend", "salary_trend"],
   "employmentStability": ["employment_stability", "job_stability"],
   "utilityPaymentBehaviour": ["utility_payment_behaviour", "utility_behaviour", "bill_payments"],
-  "declaredAssets": ["declared_assets", "mutual_funds", "equities", "total_assets"]
+  "declaredAssets": ["declared_assets", "mutual_funds", "equities", "total_assets", "assets_value", "asset_value"]
 }
 
 def normalize_column_name(name: str) -> str:

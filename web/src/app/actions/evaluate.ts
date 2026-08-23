@@ -21,15 +21,20 @@ export async function runEvaluationAction(applicantId: string, applicantRef: str
   // 2. Prepare profile data for python API
   const raw = applicant.raw_input_json || {};
   const profile = {
+    sourceType: "structured",
     ...raw,
     applicantId: applicantRef,
     age: applicant.age ?? raw.age,
     employmentType: applicant.employment_type ?? raw.employmentType,
-    requestedLoanAmount: applicant.requested_amount ?? raw.requested_amount,
-    tenureMonths: applicant.tenure_months ?? raw.tenure_months,
-    declaredIncome: applicant.monthly_income ?? raw.monthly_income ?? raw.annual_income,
-    bureauScore: applicant.cibil_score ?? raw.cibil_score,
-    hasWriteOff: applicant.last_default ?? raw.hasWriteOff ?? raw.has_write_off,
+    requestedLoanAmount: applicant.requested_amount ?? raw.requested_amount ?? raw.requestedLoanAmount,
+    requestedTenure: applicant.tenure_months ?? raw.tenure_months ?? raw.requestedTenure,
+    declaredIncome: applicant.monthly_income ?? raw.monthly_income ?? raw.annual_income ?? raw.declaredIncome,
+    bureauScore: applicant.cibil_score ?? raw.cibil_score ?? raw.bureauScore,
+    existingObligations: applicant.existing_emi ?? raw.existing_emi ?? raw.existingObligations,
+    bankAvgBalance: applicant.avg_bank_balance ?? raw.avg_bank_balance ?? raw.bankAvgBalance,
+    bounceCount: applicant.bounce_count ?? raw.bounce_count ?? raw.bounceCount,
+    writeOffFlag: applicant.last_default ?? raw.hasWriteOff ?? raw.has_write_off ?? raw.writeOffFlag ?? false,
+    hasWriteOff: applicant.last_default ?? raw.hasWriteOff ?? raw.has_write_off ?? false,
   };
 
   const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://localhost:8000";

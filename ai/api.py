@@ -163,7 +163,14 @@ def _merge_into(target: NormalizedApplicantProfile, source):
 async def evaluate_applicant(req: EvaluationRequest, background_tasks: BackgroundTasks):
     try:
         # 1. Parse and validate the profile
-        profile = NormalizedApplicantProfile(**req.profile)
+        raw_profile = dict(req.profile) if isinstance(req.profile, dict) else {}
+        if "sourceType" not in raw_profile:
+            raw_profile["sourceType"] = "structured"
+            
+        try:
+            profile = map_structured_input(raw_profile)
+        except Exception:
+            profile = NormalizedApplicantProfile(**raw_profile)
         
         # 2. Run the agentic engine
         decision_report = run_underwriting(profile)
